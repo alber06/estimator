@@ -1,7 +1,9 @@
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 import structlog
+from litellm import Router
 
 from app.config import get_settings
 from app.context.examples import format_examples_for_prompt, select_examples
@@ -83,18 +85,73 @@ class GenerationOptions:
     thinking_budget: int | None = None
 
 
+@dataclass
+class SystemPromptParts:
+    """Decomposed system prompt sections for debug UIs and assembly."""
+
+    role: str
+    cleaning_block: str
+    rates: str
+    output_spec: str
+    examples_block: str
+
+    @property
+    def system_prompt_without_examples(self) -> str:
+        sections = [self.role, self.cleaning_block, self.rates, self.output_spec]
+        return "\n\n".join(s for s in sections if s)
+
+    @property
+    def full_system_prompt(self) -> str:
+        sections = [
+            self.role,
+            self.cleaning_block,
+            self.rates,
+            self.output_spec,
+            self.examples_block,
+        ]
+        return "\n\n".join(s for s in sections if s)
+
+
+@dataclass
+class StreamPromptInfo:
+    """Prompt context surfaced before the LLM response streams."""
+
+    system_prompt_without_examples: str
+    examples_block: str
+
+
+@dataclass
+class StreamMetrics:
+    """Base metrics for the estimation LLM call."""
+
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    latency_ms: int
+
+
+@dataclass
+class StreamEvent:
+    """Tagged event emitted by ``generate_estimation_stream``."""
+
+    kind: Literal["metadata", "delta", "done"]
+    text: str | None = None
+    prompt_info: StreamPromptInfo | None = None
+    metrics: StreamMetrics | None = None
+
+
 # ---------------------------------------------------------------------------
 # System prompt construction
 # ---------------------------------------------------------------------------
 
 
-def build_system_prompt(
+def build_system_prompt_parts(
     example_format: ExampleFormat = "markdown",
     num_examples: int = 3,
     use_examples: bool = True,
     inline_cleaning: bool = False,
-) -> str:
-    """Assemble the system prompt with role, rates, output spec and (optionally) examples."""
+) -> SystemPromptParts:
+    """Build decomposed system prompt sections."""
     role = (
         "You are a senior software consultant with 15+ years of experience in project "
         "estimation. Your task is to produce a detailed software project estimation based "
@@ -119,8 +176,28 @@ def build_system_prompt(
 
     cleaning_block = INLINE_CLEANING_BLOCK if inline_cleaning else ""
 
-    sections = [role, cleaning_block, rates, ACTIVE_OUTPUT_PROMPT, examples_block]
-    return "\n\n".join(s for s in sections if s)
+    return SystemPromptParts(
+        role=role,
+        cleaning_block=cleaning_block,
+        rates=rates,
+        output_spec=ACTIVE_OUTPUT_PROMPT,
+        examples_block=examples_block,
+    )
+
+
+def build_system_prompt(
+    example_format: ExampleFormat = "markdown",
+    num_examples: int = 3,
+    use_examples: bool = True,
+    inline_cleaning: bool = False,
+) -> str:
+    """Assemble the system prompt with role, rates, output spec and (optionally) examples."""
+    return build_system_prompt_parts(
+        example_format=example_format,
+        num_examples=num_examples,
+        use_examples=use_examples,
+        inline_cleaning=inline_cleaning,
+    ).full_system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +321,149 @@ def generate_estimation(
 
     return result
 
+def _usage_from_stream_chunk(chunk) -> dict | None:
+    """Extract token usage from a LiteLLM streaming chunk when the provider sends it."""
+    usage = getattr(chunk, "usage", None)
+    if usage is None and hasattr(chunk, "model_dump"):
+        usage = chunk.model_dump().get("usage")
+
+    if not usage:
+        return None
+
+    if isinstance(usage, dict):
+        input_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+        output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+    else:
+        input_tokens = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None)
+        output_tokens = (
+            getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None)
+        )
+
+    if input_tokens is None and output_tokens is None:
+        return None
+
+    input_tokens = input_tokens or 0
+    output_tokens = output_tokens or 0
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
+def generate_estimation_stream(
+    transcription: str,
+    opts: GenerationOptions | None = None,
+):
+    """Stream estimation events: metadata, text deltas, then call metrics."""
+    opts = opts or GenerationOptions()
+    settings = get_settings()
+    t0 = time.perf_counter()
+
+    prep_usage = {"input": 0, "output": 0}
+    extracted_requirements: str | None = None
+    user_input = transcription
+
+    if opts.preprocessing == "two_phase":
+        extracted_requirements, prep_usage = extract_requirements(transcription, opts)
+        user_input = extracted_requirements
+
+    prompt_parts = build_system_prompt_parts(
+        example_format=opts.example_format,
+        num_examples=opts.num_examples,
+        use_examples=opts.use_examples,
+        inline_cleaning=(opts.preprocessing == "inline_cleaning"),
+    )
+    system_prompt = prompt_parts.full_system_prompt
+
+    model = opts.model or settings.LLM_MODEL
+
+    yield StreamEvent(
+        kind="metadata",
+        prompt_info=StreamPromptInfo(
+            system_prompt_without_examples=prompt_parts.system_prompt_without_examples,
+            examples_block=prompt_parts.examples_block,
+        ),
+    )
+
+    log.info(
+        "generating_estimation",
+        provider=settings.LLM_PROVIDER,
+        model=model,
+        preprocessing=opts.preprocessing,
+        example_format=opts.example_format,
+        num_examples=opts.num_examples,
+        use_examples=opts.use_examples,
+        max_tokens=opts.max_tokens,
+        thinking_budget=opts.thinking_budget,
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "estimator",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": settings.OPENAI_API_KEY,
+                },
+            },
+            {
+                "model_name": "estimator",
+                "litellm_params": {
+                    "model": "claude-haiku-4-5",
+                    "api_key": settings.ANTHROPIC_API_KEY,
+                },
+            },
+        ],
+        fallbacks=[{"estimator": ["estimator"]}],
+        num_retries=2,
+    )
+
+    resolved_model = model
+    usage: dict | None = None
+
+    try:
+        response = router.completion(
+            model="estimator",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            max_tokens=opts.max_tokens,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        for chunk in response:
+            if getattr(chunk, "model", None):
+                resolved_model = chunk.model
+
+            choice = chunk.choices[0]
+            delta = choice.delta.content or ""
+            if delta:
+                yield StreamEvent(kind="delta", text=delta)
+
+            chunk_usage = _usage_from_stream_chunk(chunk)
+            if chunk_usage:
+                usage = chunk_usage
+    except LLMServiceError:
+        raise
+    except Exception as exc:
+        log.error("llm_call_failed", error=str(exc), provider=settings.LLM_PROVIDER)
+        raise LLMServiceError(f"LLM call failed: {exc}") from exc
+
+    input_tokens = usage["input_tokens"] if usage else None
+    output_tokens = usage["output_tokens"] if usage else None
+
+    yield StreamEvent(
+        kind="done",
+        metrics=StreamMetrics(
+            model=resolved_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+        ),
+    )
 
 # ---------------------------------------------------------------------------
 # Provider wrappers

@@ -5,6 +5,10 @@ from pydantic import BaseModel, Field
 PreprocessingMode = Literal["none", "inline_cleaning", "two_phase"]
 ExampleFormat = Literal["markdown", "json", "narrative"]
 
+class EstimationStreamRequest(BaseModel):
+    """Incoming request containing a meeting transcription to estimate."""
+
+    transcription: str = Field(..., min_length=50, description="Meeting description text")
 
 class EstimationRequest(BaseModel):
     """Incoming request containing a meeting transcription to estimate."""
