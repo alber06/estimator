@@ -1,9 +1,13 @@
 import structlog
-from fastapi import APIRouter, HTTPException
 
-from app.schemas.estimation import EstimationRequest, EstimationResponse
+from collections.abc import AsyncIterable
+
+from fastapi import APIRouter, HTTPException
+from fastapi.sse import EventSourceResponse, ServerSentEvent
+
+from app.schemas.estimation import EstimationRequest, EstimationResponse, EstimationStreamRequest
 from app.services.evaluation import evaluate_estimation_structure
-from app.services.llm_service import GenerationOptions, LLMServiceError, generate_estimation
+from app.services.llm_service import GenerationOptions, LLMServiceError, generate_estimation, generate_estimation_stream
 
 log = structlog.get_logger()
 
@@ -36,3 +40,13 @@ async def create_estimation(request: EstimationRequest) -> EstimationResponse:
     )
 
     return EstimationResponse(**result, validation=validation)
+
+@router.post("/estimate/stream", response_class=EventSourceResponse)
+async def estimate_stream(request: EstimationStreamRequest) -> AsyncIterable[ServerSentEvent]:
+    try:
+        for event in generate_estimation_stream(request.transcription):
+            if event.kind == "delta" and event.text:
+                yield ServerSentEvent(data=event.text)
+    except LLMServiceError as exc:
+        log.error("estimation_stream_error", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
