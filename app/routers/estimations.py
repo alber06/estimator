@@ -45,8 +45,7 @@ async def create_estimation(request: EstimationRequest) -> EstimationResponse:
 async def estimate_stream(request: EstimationStreamRequest) -> AsyncIterable[ServerSentEvent]:
     try:
         for event in generate_estimation_stream(request.transcription):
-            if event.kind == "delta" and event.text:
-                yield ServerSentEvent(data=event.text)
+            yield ServerSentEvent(data=event)
     except LLMServiceError as exc:
         log.error("estimation_stream_error", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
