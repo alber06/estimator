@@ -19,6 +19,29 @@ class LLMServiceError(Exception):
     """Raised when the LLM provider call fails."""
 
 
+ConversationMessage = dict[str, str]
+_CONVERSATION_ROLES = frozenset({"user", "assistant"})
+
+
+def _conversation_to_text(messages: list[ConversationMessage]) -> str:
+    """Serialize a conversation into plain text for preprocessing helpers."""
+    return "\n\n".join(f"{msg['role'].capitalize()}: {msg['content']}" for msg in messages)
+
+
+def _resolve_stream_input(
+    transcription: str | None,
+    messages: list[ConversationMessage] | None,
+) -> tuple[list[ConversationMessage], str]:
+    """Return conversation turns and the source text used for preprocessing."""
+    if messages is not None:
+        return messages, _conversation_to_text(messages)
+
+    if transcription is not None:
+        return [{"role": "user", "content": transcription}], transcription
+
+    raise LLMServiceError("Either transcription or messages must be provided")
+
+
 # ---------------------------------------------------------------------------
 # Prompt building blocks
 #
@@ -352,7 +375,9 @@ def _usage_from_stream_chunk(chunk) -> dict | None:
 
 
 def generate_estimation_stream(
-    transcription: str,
+    transcription: str | None = None,
+    *,
+    messages: list[ConversationMessage] | None = None,
     opts: GenerationOptions | None = None,
 ):
     """Stream estimation events: metadata, text deltas, then call metrics."""
@@ -360,13 +385,13 @@ def generate_estimation_stream(
     settings = get_settings()
     t0 = time.perf_counter()
 
-    prep_usage = {"input": 0, "output": 0}
+    conversation, source_text = _resolve_stream_input(transcription, messages)
+
     extracted_requirements: str | None = None
-    user_input = transcription
 
     if opts.preprocessing == "two_phase":
-        extracted_requirements, prep_usage = extract_requirements(transcription, opts)
-        user_input = extracted_requirements
+        extracted_requirements = extract_requirements(source_text, opts)
+        conversation = [{"role": "user", "content": extracted_requirements}]
 
     prompt_parts = build_system_prompt_parts(
         example_format=opts.example_format,
@@ -427,10 +452,7 @@ def generate_estimation_stream(
     try:
         response = router.completion(
             model="estimator",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
-            ],
+            messages=[{"role": "system", "content": system_prompt}, *conversation],
             max_tokens=opts.max_tokens,
             stream=True,
             stream_options={"include_usage": True},

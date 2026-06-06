@@ -101,7 +101,7 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
 
     with st.chat_message("assistant"):
         try:
-            events = generate_estimation_stream(prompt)
+            events = generate_estimation_stream(messages=list(st.session_state.messages))
             stream = _text_only_stream(events)
             response = st.write_stream(stream)
             st.session_state.messages.append({"role": "assistant", "content": response})
