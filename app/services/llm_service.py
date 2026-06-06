@@ -405,6 +405,7 @@ def generate_estimation_stream(
                 "litellm_params": {
                     "model": "gpt-4o-mini",
                     "api_key": settings.OPENAI_API_KEY,
+                    "order": 1,
                 },
             },
             {
@@ -412,6 +413,7 @@ def generate_estimation_stream(
                 "litellm_params": {
                     "model": "claude-haiku-4-5",
                     "api_key": settings.ANTHROPIC_API_KEY,
+                    "order": 2,
                 },
             },
         ],
