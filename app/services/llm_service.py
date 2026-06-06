@@ -109,38 +109,10 @@ class GenerationOptions:
 
 
 @dataclass
-class SystemPromptParts:
-    """Decomposed system prompt sections for debug UIs and assembly."""
-
-    role: str
-    cleaning_block: str
-    rates: str
-    output_spec: str
-    examples_block: str
-
-    @property
-    def system_prompt_without_examples(self) -> str:
-        sections = [self.role, self.cleaning_block, self.rates, self.output_spec]
-        return "\n\n".join(s for s in sections if s)
-
-    @property
-    def full_system_prompt(self) -> str:
-        sections = [
-            self.role,
-            self.cleaning_block,
-            self.rates,
-            self.output_spec,
-            self.examples_block,
-        ]
-        return "\n\n".join(s for s in sections if s)
-
-
-@dataclass
 class StreamPromptInfo:
-    """Prompt context surfaced before the LLM response streams."""
+    """System prompt exactly as sent to the LLM."""
 
-    system_prompt_without_examples: str
-    examples_block: str
+    system_prompt: str
 
 
 @dataclass
@@ -168,13 +140,13 @@ class StreamEvent:
 # ---------------------------------------------------------------------------
 
 
-def build_system_prompt_parts(
+def build_system_prompt(
     example_format: ExampleFormat = "markdown",
     num_examples: int = 3,
     use_examples: bool = True,
     inline_cleaning: bool = False,
-) -> SystemPromptParts:
-    """Build decomposed system prompt sections."""
+) -> str:
+    """Assemble the system prompt with role, rates, output spec and (optionally) examples."""
     role = (
         "You are a senior software consultant with 15+ years of experience in project "
         "estimation. Your task is to produce a detailed software project estimation based "
@@ -198,29 +170,8 @@ def build_system_prompt_parts(
             )
 
     cleaning_block = INLINE_CLEANING_BLOCK if inline_cleaning else ""
-
-    return SystemPromptParts(
-        role=role,
-        cleaning_block=cleaning_block,
-        rates=rates,
-        output_spec=ACTIVE_OUTPUT_PROMPT,
-        examples_block=examples_block,
-    )
-
-
-def build_system_prompt(
-    example_format: ExampleFormat = "markdown",
-    num_examples: int = 3,
-    use_examples: bool = True,
-    inline_cleaning: bool = False,
-) -> str:
-    """Assemble the system prompt with role, rates, output spec and (optionally) examples."""
-    return build_system_prompt_parts(
-        example_format=example_format,
-        num_examples=num_examples,
-        use_examples=use_examples,
-        inline_cleaning=inline_cleaning,
-    ).full_system_prompt
+    sections = [role, cleaning_block, rates, ACTIVE_OUTPUT_PROMPT, examples_block]
+    return "\n\n".join(s for s in sections if s)
 
 
 # ---------------------------------------------------------------------------
@@ -390,25 +341,21 @@ def generate_estimation_stream(
     extracted_requirements: str | None = None
 
     if opts.preprocessing == "two_phase":
-        extracted_requirements = extract_requirements(source_text, opts)
+        extracted_requirements, _ = extract_requirements(source_text, opts)
         conversation = [{"role": "user", "content": extracted_requirements}]
 
-    prompt_parts = build_system_prompt_parts(
+    system_prompt = build_system_prompt(
         example_format=opts.example_format,
         num_examples=opts.num_examples,
         use_examples=opts.use_examples,
         inline_cleaning=(opts.preprocessing == "inline_cleaning"),
     )
-    system_prompt = prompt_parts.full_system_prompt
 
     model = opts.model or settings.LLM_MODEL
 
     yield StreamEvent(
         kind="metadata",
-        prompt_info=StreamPromptInfo(
-            system_prompt_without_examples=prompt_parts.system_prompt_without_examples,
-            examples_block=prompt_parts.examples_block,
-        ),
+        prompt_info=StreamPromptInfo(system_prompt=system_prompt),
     )
 
     log.info(

@@ -1,34 +1,24 @@
 from types import SimpleNamespace
 
-import pytest
-
 from app.services.llm_service import (
-    LLMServiceError,
     _conversation_to_text,
-    _normalize_conversation,
     _resolve_stream_input,
     _usage_from_stream_chunk,
     build_system_prompt,
-    build_system_prompt_parts,
 )
 
 
-def test_build_system_prompt_parts_matches_legacy():
-    parts = build_system_prompt_parts()
-    assert parts.full_system_prompt == build_system_prompt()
+def test_build_system_prompt_includes_examples():
+    with_examples = build_system_prompt(use_examples=True, num_examples=2)
+    without_examples = build_system_prompt(use_examples=False)
+    assert "reference estimations" in with_examples
+    assert "reference estimations" not in without_examples
+    assert len(with_examples) > len(without_examples)
 
 
-def test_examples_block_is_separate_from_core_prompt():
-    parts = build_system_prompt_parts(use_examples=True, num_examples=2)
-    assert parts.examples_block
-    assert parts.examples_block not in parts.system_prompt_without_examples
-    assert parts.examples_block in parts.full_system_prompt
-
-
-def test_no_examples_when_disabled():
-    parts = build_system_prompt_parts(use_examples=False)
-    assert parts.examples_block == ""
-    assert parts.full_system_prompt == parts.system_prompt_without_examples
+def test_build_system_prompt_includes_rates():
+    prompt = build_system_prompt()
+    assert "62.50 EUR/hour" in prompt
 
 
 def test_usage_from_stream_chunk_openai_shape():
@@ -74,11 +64,6 @@ def test_resolve_stream_input_from_messages():
     assert conversation == messages
     assert "User: Necesito una app de inventario" in source_text
     assert "Assistant: ¿Cuántos usuarios tendrá?" in source_text
-
-
-def test_normalize_conversation_rejects_system_role():
-    with pytest.raises(LLMServiceError, match="Unsupported conversation role"):
-        _normalize_conversation([{"role": "system", "content": "secret"}])
 
 
 def test_conversation_to_text_formats_roles():

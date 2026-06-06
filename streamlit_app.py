@@ -19,7 +19,6 @@ if "last_metrics" not in st.session_state:
 
 def _render_sidebar_content(
     prompt_area: st.delta_generator.DeltaGenerator,
-    examples_area: st.delta_generator.DeltaGenerator,
     metrics_area: st.delta_generator.DeltaGenerator,
     *,
     prompt_info: StreamPromptInfo | None = None,
@@ -31,22 +30,15 @@ def _render_sidebar_content(
     if prompt_info:
         with prompt_area.container():
             st.markdown("**System prompt**")
-            st.code(prompt_info.system_prompt_without_examples, language="markdown")
-        with examples_area.container():
-            st.markdown("**Static context (CAG examples)**")
-            if prompt_info.examples_block:
-                st.code(prompt_info.examples_block, language="markdown")
-            else:
-                st.caption("No examples injected for this call.")
+            st.code(prompt_info.system_prompt, language="markdown")
     else:
         prompt_area.caption("System prompt will appear after the first request.")
-        examples_area.empty()
 
     if metrics:
         input_tokens = metrics.input_tokens if metrics.input_tokens is not None else "—"
         output_tokens = metrics.output_tokens if metrics.output_tokens is not None else "—"
         with metrics_area.container():
-            st.markdown("**Last LLM call**")
+            st.markdown("**Metrics**")
             st.markdown(f"- **Model:** `{metrics.model}`")
             st.markdown(f"- **Input tokens:** {input_tokens}")
             st.markdown(f"- **Output tokens:** {output_tokens}")
@@ -54,23 +46,16 @@ def _render_sidebar_content(
     else:
         metrics_area.caption("Metrics will appear after the response completes.")
 
+
 def _on_prompt_info(prompt_info: StreamPromptInfo) -> None:
     st.session_state.prompt_info = prompt_info
-    _render_sidebar_content(
-        prompt_area,
-        examples_area,
-        metrics_area,
-        prompt_info=prompt_info,
-    )
+    _render_sidebar_content(prompt_area, metrics_area, prompt_info=prompt_info)
+
 
 def _on_metrics(metrics: StreamMetrics) -> None:
     st.session_state.last_metrics = metrics
-    _render_sidebar_content(
-        prompt_area,
-        examples_area,
-        metrics_area,
-        metrics=metrics,
-    )
+    _render_sidebar_content(prompt_area, metrics_area, metrics=metrics)
+
 
 def _text_only_stream(events):
     """Filter StreamEvents: update sidebar hooks, yield only text for write_stream."""
@@ -86,9 +71,8 @@ def _text_only_stream(events):
 with st.sidebar:
     st.header("Prompt & metrics")
     prompt_area = st.empty()
-    examples_area = st.empty()
     metrics_area = st.empty()
-    _render_sidebar_content(prompt_area, examples_area, metrics_area)
+    _render_sidebar_content(prompt_area, metrics_area)
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
