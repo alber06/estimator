@@ -1,15 +1,31 @@
 from typing import Literal
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
 PreprocessingMode = Literal["none", "inline_cleaning", "two_phase"]
 ExampleFormat = Literal["markdown", "json", "narrative"]
 
+class ProjectType(str, Enum):
+    MOBILE_APP = "mobile_app"
+    WEB_SAAS = "web_saas"
+    INTERNAL_TOOL = "internal_tool"
+    DATA_PIPELINE = "data_pipeline"
+
+class DetailLevel(str, Enum):
+    SUMMARY = "summary"
+    MEDIUM = "medium"
+    DETAILED = "detailed"
+
+class OutputFormat(str, Enum):
+    PHASES_TABLE = "phases_table"
+    LINE_ITEMS = "line_items"
+    NARRATIVE = "narrative"
 
 class EstimationRequest(BaseModel):
     """Incoming request containing a meeting transcription to estimate."""
 
-    transcription: str = Field(..., min_length=50, description="Meeting transcription text")
+    transcription: str = Field(..., min_length=50, max_length=2000, description="Meeting transcription text")
 
     preprocessing: PreprocessingMode = Field(
         default="none",
@@ -49,6 +65,9 @@ class EstimationRequest(BaseModel):
         default=True,
         description="Run the structural evaluation on the generated estimation",
     )
+    project_type: ProjectType = Field(..., description="Project type")
+    detail_level: DetailLevel = Field(..., description="Detail level")
+    output_format: OutputFormat = Field(..., description="Output format")
 
 
 class TokenUsage(BaseModel):
@@ -84,6 +103,7 @@ class EstimationResponse(BaseModel):
     """Response containing the generated estimation and metadata."""
 
     estimation: str = Field(..., description="Generated software estimation in markdown")
+    prompt_version: str = Field(..., description="Prompt version used")
     model: str = Field(..., description="LLM model used")
     provider: str = Field(..., description="LLM provider used")
     usage: TokenUsage
@@ -95,3 +115,18 @@ class EstimationResponse(BaseModel):
     )
     latency_ms: int = Field(..., description="Server-side total latency in milliseconds")
     validation: StructureCheck | None = None
+
+    # --- Session 3 — wrapper metadata (additive, defaults preserve Session 2 tests) ---
+    cache_hit: bool = Field(default=False, description="True when the response came from Redis")
+    cost_usd: float = Field(default=0.0, description="Estimated USD cost based on token usage")
+
+
+class StreamEstimationRequest(BaseModel):
+    """Streaming endpoint request — only the transcription, knobs are not exposed."""
+
+    transcription: str = Field(..., min_length=50, description="Meeting transcription text")
+    model: str | None = Field(default=None, description="Override the default model")
+    max_tokens: int = Field(default=4000, gt=0, le=16000)
+    project_type: ProjectType = Field(..., description="Project type")
+    detail_level: DetailLevel = Field(..., description="Detail level")
+    output_format: OutputFormat = Field(..., description="Output format")
