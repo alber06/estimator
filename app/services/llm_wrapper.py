@@ -4,8 +4,7 @@ and structured logging to every LLM call in the estimator.
 Design notes
 ------------
 - The wrapper exposes two primitives: ``complete()`` (blocking, full response) and
-  ``complete_stream()`` (yields chunks). Higher-level orchestration (preprocessing,
-  validation, prompt building) stays in ``llm_service.py``.
+  ``complete_stream()`` (yields chunks).
 - The Router is configured with two deployments under the same ``model_name``
   ("estimator") so LiteLLM can switch from primary to fallback transparently.
   When the caller overrides the model per-request (Session 2 live demos), we

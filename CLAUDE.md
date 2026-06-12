@@ -40,7 +40,7 @@ The estimator is a FastAPI service implementing **Cache Augmented Generation (CA
 
 Request flow:
 
-1. `app/routers/estimations.py` — `POST /api/v1/estimate` accepts an `EstimationRequest` (transcription + optional knobs: `preprocessing`, `example_format`, `num_examples`, `use_examples`, `model`, `max_tokens`, `thinking_budget`, `evaluate`).
+1. `app/routers/estimations.py` — `POST /api/v1/estimate` accepts an `EstimationRequest` (description + optional knobs: `preprocessing`, `example_format`, `num_examples`, `use_examples`, `model`, `max_tokens`, `thinking_budget`, `evaluate`).
 2. `app/services/llm_service.py::generate_estimation` — builds a `GenerationOptions`, optionally runs `extract_requirements` for two-phase preprocessing, builds the system prompt (`build_system_prompt`), and dispatches to either `_call_openai` or `_call_anthropic` based on `LLM_PROVIDER`. Returns a dict with `estimation`, `model`, `provider`, `usage`, `finish_reason`, `latency_ms`, `preprocessing`, `extracted_requirements`.
 3. `app/services/evaluation.py::evaluate_estimation_structure` — pure regex/parsing pass that produces a `StructureCheck` (sections present, breakdown sums match declared totals, `finish_reason` ok, `score`, `issues`).
 4. The router merges the LLM result with the validation and returns `EstimationResponse`.
@@ -60,19 +60,19 @@ Key design points future changes should respect:
 The endpoint is built to support side-by-side comparisons without code changes. The `usage`, `latency_ms`, `finish_reason` and `validation.score` fields in the response are the projected metrics during sessions.
 
 ```bash
-TRANS=$(jq -Rs . < estimator/app/fixtures/long_transcription.txt)
+TRANS=$(jq -Rs . < estimator/app/fixtures/long_description.txt)
 
 # Three preprocessing modes
 for MODE in none inline_cleaning two_phase; do
   curl -s localhost:8000/api/v1/estimate -H 'Content-Type: application/json' \
-    -d "{\"transcription\": $TRANS, \"preprocessing\":\"$MODE\"}" \
+    -d "{\"description\": $TRANS, \"preprocessing\":\"$MODE\"}" \
     | jq "{mode:\"$MODE\", score:.validation.score, latency_ms, usage}"
 done
 
 # Number of CAG examples (rendimiento decreciente)
 for N in 0 1 3 5; do
   curl -s localhost:8000/api/v1/estimate -H 'Content-Type: application/json' \
-    -d "{\"transcription\": $TRANS, \"num_examples\": $N}" \
+    -d "{\"description\": $TRANS, \"num_examples\": $N}" \
     | jq "{n: $N, input_tokens: .usage.input_tokens, latency_ms, score: .validation.score}"
 done
 ```

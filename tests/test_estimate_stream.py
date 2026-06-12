@@ -41,7 +41,7 @@ def test_stream_endpoint_emits_token_and_done_events() -> None:
             with client.stream(
                 "POST",
                 "/api/v1/estimate/stream",
-                json={"transcription": "x" * 60},
+                json={"description": "x" * 60},
             ) as response:
                 assert response.status_code == 200
                 body = b"".join(response.iter_bytes()).decode()
@@ -70,7 +70,7 @@ def test_stream_endpoint_serialises_multiline_chunk_as_multiple_data_lines() -> 
             with client.stream(
                 "POST",
                 "/api/v1/estimate/stream",
-                json={"transcription": "x" * 60},
+                json={"description": "x" * 60},
             ) as response:
                 assert response.status_code == 200
                 body = b"".join(response.iter_bytes()).decode()
@@ -82,14 +82,14 @@ def test_stream_endpoint_serialises_multiline_chunk_as_multiple_data_lines() -> 
         app.dependency_overrides.pop(get_llm_wrapper, None)
 
 
-def test_stream_endpoint_rejects_short_transcription() -> None:
+def test_stream_endpoint_rejects_short_description() -> None:
     stub = _StubWrapper(chunks=["irrelevant"])
     app.dependency_overrides[get_llm_wrapper] = lambda: stub
     try:
         with TestClient(app) as client:
             response = client.post(
                 "/api/v1/estimate/stream",
-                json={"transcription": "too short"},
+                json={"description": "too short"},
             )
         assert response.status_code == 422
     finally:

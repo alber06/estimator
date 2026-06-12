@@ -52,7 +52,7 @@ def call_log(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict]]:
 
 
 def test_default_request_returns_validation(client: TestClient, call_log: list[dict]) -> None:
-    payload = {"transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks."}
+    payload = {"description": "We need a small CRM with auth, contacts and roles. MVP six weeks."}
     response = client.post("/api/v1/estimate", json=payload)
     assert response.status_code == 200
     body = response.json()
@@ -70,7 +70,7 @@ def test_two_phase_invokes_llm_twice_and_fills_extracted(
     client: TestClient, call_log: list[dict]
 ) -> None:
     payload = {
-        "transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
+        "description": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
         "preprocessing": "two_phase",
     }
     response = client.post("/api/v1/estimate", json=payload)
@@ -80,7 +80,7 @@ def test_two_phase_invokes_llm_twice_and_fills_extracted(
     assert body["extracted_requirements"] is not None
     assert len(call_log) == 2
     # The second call's user message should be the extracted requirements,
-    # not the original transcription.
+    # not the original description.
     assert call_log[1]["user_message"] == body["extracted_requirements"]
 
 
@@ -88,7 +88,7 @@ def test_max_tokens_low_propagates_finish_reason_length(
     client: TestClient, call_log: list[dict]
 ) -> None:
     payload = {
-        "transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
+        "description": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
         "max_tokens": 200,
     }
     response = client.post("/api/v1/estimate", json=payload)
@@ -101,7 +101,7 @@ def test_max_tokens_low_propagates_finish_reason_length(
 
 def test_example_format_json_returns_200(client: TestClient, call_log: list[dict]) -> None:
     payload = {
-        "transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
+        "description": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
         "example_format": "json",
         "num_examples": 2,
     }
@@ -116,7 +116,7 @@ def test_model_override_is_passed_to_provider(
     client: TestClient, call_log: list[dict]
 ) -> None:
     payload = {
-        "transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
+        "description": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
         "model": "gpt-4o",
     }
     response = client.post("/api/v1/estimate", json=payload)
@@ -128,7 +128,7 @@ def test_use_examples_false_omits_examples_block(
     client: TestClient, call_log: list[dict]
 ) -> None:
     payload = {
-        "transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
+        "description": "We need a small CRM with auth, contacts and roles. MVP six weeks.",
         "use_examples": False,
     }
     response = client.post("/api/v1/estimate", json=payload)

@@ -26,7 +26,6 @@ load_dotenv()
 
 API_BASE_URL = os.getenv("ESTIMATOR_API_BASE_URL", "http://localhost:8000")
 ESTIMATE_ENDPOINT = f"{API_BASE_URL.rstrip('/')}/api/v1/estimate"
-STREAM_ENDPOINT = f"{API_BASE_URL.rstrip('/')}/api/v1/estimate/stream"
 
 PROJECT_TYPE_LABELS: dict[ProjectType, str] = {
     ProjectType.MOBILE_APP: "Mobile app",
@@ -56,8 +55,8 @@ st.caption(
 
 if "estimating" not in st.session_state:
     st.session_state.estimating = False
-if "estimation" not in st.session_state:
-    st.session_state.estimation = None
+if "response" not in st.session_state:
+    st.session_state.response = None
 if "estimation_error" not in st.session_state:
     st.session_state.estimation_error = None
 
@@ -72,49 +71,9 @@ def fetch_estimation(payload: EstimationRequest) -> EstimationResponse:
     response.raise_for_status()
     return EstimationResponse.model_validate(response.json())
 
-
-def stream_estimation(payload: EstimationRequest) -> Iterator[str]:
-    """POST to the SSE endpoint and yield text chunks as they arrive.
-
-    Per the SSE spec, a single message with internal newlines is serialised as
-    multiple ``data:`` lines, and the client must join them with ``\\n`` to
-    reconstruct the original payload. A blank line terminates the message.
-    """
-    with httpx.stream(
-        "POST",
-        STREAM_ENDPOINT,
-        json=payload.model_dump(mode="json"),
-        timeout=httpx.Timeout(120.0, connect=10.0),
-        headers={"Accept": "text/event-stream"},
-    ) as response:
-        response.raise_for_status()
-        current_event = "token"
-        data_lines: list[str] = []
-        for raw_line in response.iter_lines():
-            if raw_line == "":
-                if data_lines:
-                    payload_text = "\n".join(data_lines)
-                    data_lines = []
-                    if current_event == "token":
-                        yield payload_text
-                    elif current_event == "error":
-                        yield f"\n\n[error] {payload_text}"
-                    elif current_event == "done":
-                        return
-                current_event = "token"
-                continue
-            if raw_line.startswith("event:"):
-                current_event = raw_line[6:].strip()
-            elif raw_line.startswith("data:"):
-                # The SSE spec defines exactly one space after `data:` as
-                # framing, not payload — preserve any further whitespace.
-                data_lines.append(
-                    raw_line[6:] if raw_line.startswith("data: ") else raw_line[5:]
-                )
-
 with st.form("estimation_form"):
     st.write("Enter estimation data")
-    transcription = st.text_area("Transcription")
+    description = st.text_area("Description")
     project_type = st.selectbox(
         "Project type", 
         options=list[str](PROJECT_TYPE_LABELS.keys()),
@@ -138,21 +97,27 @@ with st.form("estimation_form"):
         submitted = st.form_submit_button("Submit")
 
 if submitted:
-    st.session_state.estimating = True
-    st.session_state.estimation = None
-    st.session_state.estimation_error = None
-    st.session_state.pending_request = EstimationRequest(
-        transcription=transcription,
-        project_type=project_type,
-        detail_level=detail_level,
-        output_format=output_format,
-    )
-    st.rerun()
+    stripped_description = description.strip()
+
+    if len(stripped_description) < 50:
+        st.error("Description must be at least 50 characters long")
+    else:
+        st.empty()
+        st.session_state.estimating = True
+        st.session_state.estimation = None
+        st.session_state.estimation_error = None
+        st.session_state.pending_request = EstimationRequest(
+            description=stripped_description,
+            project_type=project_type,
+            detail_level=detail_level,
+            output_format=output_format,
+        )
+        st.rerun()
 
 if st.session_state.estimating:
     try:
         response = fetch_estimation(st.session_state.pending_request)
-        st.session_state.estimation = response.estimation
+        st.session_state.response = response
     except httpx.HTTPError as exc:
         st.session_state.estimation_error = (
             f"Could not reach the estimator at `{ESTIMATE_ENDPOINT}`: {exc}"
@@ -162,8 +127,9 @@ if st.session_state.estimating:
         st.session_state.pop("pending_request", None)
     st.rerun()
 
-if st.session_state.estimation:
-    st.markdown(st.session_state.estimation)
+if st.session_state.response:
+    st.markdown(f"**Prompt version used:** `{st.session_state.response.prompt_version}`")
+    st.markdown(st.session_state.response.estimation)
 if st.session_state.estimation_error:
     st.error(st.session_state.estimation_error)
 

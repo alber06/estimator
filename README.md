@@ -53,7 +53,7 @@ uv run uvicorn app.main:app --reload
 curl -X POST http://localhost:8000/api/v1/estimate \
   -H "Content-Type: application/json" \
   -d '{
-    "transcription": "The client wants to build a mobile app for managing restaurant reservations. They need user registration, a restaurant search with filters by cuisine and location, a real-time reservation system with availability checking, push notifications for reservation confirmations and reminders, and an admin panel for restaurant owners to manage their listings and view analytics."
+    "description": "The client wants to build a mobile app for managing restaurant reservations. They need user registration, a restaurant search with filters by cuisine and location, a real-time reservation system with availability checking, push notifications for reservation confirmations and reminders, and an admin panel for restaurant owners to manage their listings and view analytics."
   }'
 ```
 
@@ -67,7 +67,7 @@ estimator/
 │   ├── routers/
 │   │   └── estimations.py  # Endpoint POST /api/v1/estimate
 │   ├── services/
-│   │   └── llm_service.py  # Logica de negocio, llamadas al LLM
+│   │   └── llm_wrapper.py  # Llamadas al LLM
 │   ├── schemas/
 │   │   └── estimation.py   # Modelos Pydantic (request/response)
 │   └── context/
@@ -91,7 +91,7 @@ Con el servicio corriendo, accede a la documentacion Swagger UI en:
 A partir de la Sesion 3 el servicio incorpora una capa de wrapper sobre el LLM que anade:
 
 - **Fallback de proveedor** (LiteLLM Router) — si el modelo primario falla, se intenta el secundario
-- **Cache exact-match** en Redis — la misma transcripcion no vuelve a pagar tokens
+- **Cache exact-match** en Redis — la misma descripcion no vuelve a pagar tokens
 - **Streaming SSE** — endpoint `POST /api/v1/estimate/stream` que emite los tokens segun llegan
 - **UI Streamlit** — cliente real que consume el endpoint SSE
 
@@ -111,7 +111,7 @@ Desde CLI:
 ```bash
 curl -N -X POST http://localhost:8000/api/v1/estimate/stream \
   -H 'Content-Type: application/json' \
-  -d '{"transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks."}'
+  -d '{"description": "We need a small CRM with auth, contacts and roles. MVP six weeks."}'
 ```
 
 ### Verificar la cache
@@ -119,7 +119,7 @@ curl -N -X POST http://localhost:8000/api/v1/estimate/stream \
 ```bash
 # La misma peticion dos veces — la segunda devuelve cache_hit: true
 curl -s localhost:8000/api/v1/estimate -H 'Content-Type: application/json' \
-  -d '{"transcription": "We need a small CRM with auth, contacts and roles. MVP six weeks."}' \
+  -d '{"description": "We need a small CRM with auth, contacts and roles. MVP six weeks."}' \
   | jq '{cache_hit, cost_usd}'
 
 # Inspeccionar las claves en Redis
