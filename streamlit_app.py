@@ -21,6 +21,7 @@ from app.schemas.estimation import (
     EstimationResponse,
     OutputFormat,
     ProjectType,
+    PromptVersion,
 )
 load_dotenv()
 
@@ -61,11 +62,15 @@ if "estimation_error" not in st.session_state:
     st.session_state.estimation_error = None
 
 
-def fetch_estimation(payload: EstimationRequest) -> EstimationResponse:
+def fetch_estimation(
+    payload: EstimationRequest,
+    prompt_version: PromptVersion,
+) -> EstimationResponse:
     """POST to the estimate endpoint and return the full JSON response."""
     response = httpx.post(
         ESTIMATE_ENDPOINT,
         json=payload.model_dump(mode="json"),
+        params={"prompt_version": prompt_version.value},
         timeout=httpx.Timeout(120.0, connect=10.0),
     )
     response.raise_for_status()
@@ -116,7 +121,10 @@ if submitted:
 
 if st.session_state.estimating:
     try:
-        response = fetch_estimation(st.session_state.pending_request)
+        response = fetch_estimation(
+            st.session_state.pending_request,
+            PromptVersion.V1
+        )
         st.session_state.response = response
     except httpx.HTTPError as exc:
         st.session_state.estimation_error = (

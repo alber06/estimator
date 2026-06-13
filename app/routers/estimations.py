@@ -2,12 +2,12 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sse_starlette.sse import EventSourceResponse
 
 from app.dependencies import get_llm_wrapper
 from app.prompts.loader import render_estimation_prompt
-from app.schemas.estimation import EstimationRequest, EstimationResponse
+from app.schemas.estimation import EstimationRequest, EstimationResponse, PromptVersion
 
 from app.services.llm_wrapper import LLMWrapper
 
@@ -17,12 +17,17 @@ router = APIRouter(prefix="/api/v1", tags=["estimations"])
 
 
 @router.post("/estimate", response_model=EstimationResponse)
-async def create_estimation(request: EstimationRequest, wrapper: LLMWrapper = Depends(get_llm_wrapper)) -> EstimationResponse:
+async def create_estimation(
+    request: EstimationRequest,
+    prompt_version: PromptVersion = Query(default=PromptVersion.V1, description="Prompt version to use"),
+    wrapper: LLMWrapper = Depends(get_llm_wrapper),
+) -> EstimationResponse:
     """Receive a project description and return a software project estimation."""
     
     try:
         user_prompt, system_prompt = render_estimation_prompt(
             request=request,
+            version=prompt_version.value,
         )
         result = wrapper.complete(
             system_prompt=system_prompt,
@@ -32,18 +37,20 @@ async def create_estimation(request: EstimationRequest, wrapper: LLMWrapper = De
         log.error("estimation_endpoint_error", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return EstimationResponse(**result, prompt_version="v1")
+    return EstimationResponse(**result, prompt_version=prompt_version.value)
 
 
 @router.post("/estimate/stream")
 async def create_estimation_stream(
     request: EstimationRequest,
+    prompt_version: PromptVersion = Query(default=PromptVersion.V1, description="Prompt version to use"),
     wrapper: LLMWrapper = Depends(get_llm_wrapper),
 ) -> EventSourceResponse:
     """Stream a software estimation token by token via Server-Sent Events."""
 
     user_prompt, system_prompt = render_estimation_prompt(
         request=request,
+        version=prompt_version,
     )
 
     async def event_generator() -> AsyncIterator[dict]:

@@ -2,6 +2,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from app.schemas.estimation import EstimationRequest
+from app.schemas.estimation import PromptVersion
 
 PROMPTS_DIR = Path(__file__).parent
 
@@ -15,7 +16,7 @@ _env = Environment(
 
 def render_estimation_prompt(
     request: EstimationRequest,
-    version: str = "v1",
+    version: PromptVersion = PromptVersion.V1,
 ) -> tuple[str, str]:
     system = _env.get_template(f"estimation/{version}/system.j2")
     user = _env.get_template(f"estimation/{version}/user.j2")
@@ -26,5 +27,5 @@ def render_estimation_prompt(
         "output_format": request.output_format.value,
         "description": request.description,
     }
-        
+
     return user.render(**context), system.render(**context)

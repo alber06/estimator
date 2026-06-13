@@ -1,4 +1,3 @@
-from typing import Literal
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -18,6 +17,10 @@ class OutputFormat(str, Enum):
     PHASES_TABLE = "phases_table"
     LINE_ITEMS = "line_items"
     NARRATIVE = "narrative"
+
+class PromptVersion(str, Enum):
+    V1 = "v1"
+    V2 = "v2"
 
 class EstimationRequest(BaseModel):
     """Incoming request containing a project description to estimate."""

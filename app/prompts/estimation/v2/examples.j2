@@ -1,0 +1,74 @@
+<examples>
+Below are reference estimations from previous projects. Use them as a guide for structure, level of detail, and realistic pricing. Adapt the content to match the specific project described in the project description.
+<example>
+<description>
+A consumer fitness mobile app (iOS and Android) for tracking workouts, nutrition, and progress photos. Offline-first with local sync when connectivity returns, push notifications for workout reminders, Apple Health and Google Fit integration, and a freemium model with in-app subscription via RevenueCat. No web admin — content updates ship through app releases.
+</description>
+<estimation>
+| phase            | duration_weeks | cost_eur | confidence_pct |
+|------------------|----------------|----------|----------------|
+| Discovery        | 1              | 3,000    | 80             |
+| Design           | 2              | 4,500    | 75             |
+| Implementation   | 7              | 24,500   | 65             |
+| QA               | 2              | 4,000    | 70             |
+| Launch           | 1              | 2,000    | 75             |
+
+Totals: 520 total_hours, 38,000 total_cost_eur, 13 total_duration_weeks.
+Team: 1 product designer (part-time), 1 iOS developer, 1 Android developer, 1 backend developer (part-time).
+</estimation>
+</example>
+
+<example>
+<description>
+A B2B SaaS for marketing agencies to build white-label campaign performance reports for their clients. Pulls metrics from Google Ads and Meta Ads APIs, lets account managers customise dashboards per client, and publishes a branded read-only portal with scheduled PDF exports. Multi-tenant with agency-level billing via Stripe. No mobile app.
+</description>
+<estimation>
+| phase            | duration_weeks | cost_eur | confidence_pct |
+|------------------|----------------|----------|----------------|
+| Discovery        | 1              | 2,500    | 85             |
+| Design           | 2              | 3,500    | 80             |
+| Implementation   | 6              | 17,500   | 65             |
+| QA               | 1              | 2,500    | 75             |
+| Launch           | 1              | 1,500    | 80             |
+
+Totals: 432 total_hours, 27,500 total_cost_eur, 11 total_duration_weeks.
+Team: 1 product designer (part-time), 1 backend developer, 1 full-stack developer.
+</estimation>
+</example>
+
+<example>
+<description>
+An internal IT service desk tool for a 400-person company. Employees submit hardware and access requests via a web form; managers approve in one click; IT receives a prioritised queue with SLA timers. Integrates with Azure AD for SSO and sends Slack notifications on status changes. No customer-facing UI.
+</description>
+<estimation>
+| phase            | duration_weeks | cost_eur | confidence_pct |
+|------------------|----------------|----------|----------------|
+| Discovery        | 1              | 1,500    | 90             |
+| Design           | 1              | 1,500    | 85             |
+| Implementation   | 3              | 8,500    | 80             |
+| QA               | 1              | 1,500    | 85             |
+| Launch           | 1              | 1,000    | 80             |
+
+Totals: 224 total_hours, 14,000 total_cost_eur, 7 total_duration_weeks.
+Team: 1 product designer (part-time), 1 full-stack developer.
+</estimation>
+</example>
+
+<example>
+<description>
+A near-real-time analytics pipeline for an e-commerce brand that unifies order, payment, and product catalogue events. Shopify webhooks and Stripe payment events land in Kafka; Flink enriches and deduplicates streams; curated tables land in BigQuery via Apache Beam jobs; dbt builds funnel and cohort models; Looker Studio dashboards for merchandising teams. Includes dead-letter queues, 15-minute freshness SLOs, and Datadog monitors. No storefront or customer-facing application.
+</description>
+<estimation>
+| phase            | duration_weeks | cost_eur | confidence_pct |
+|------------------|----------------|----------|----------------|
+| Discovery        | 1              | 2,000    | 85             |
+| Design           | 2              | 3,500    | 75             |
+| Implementation   | 5              | 15,000   | 65             |
+| QA               | 1              | 2,500    | 70             |
+| Launch           | 1              | 1,500    | 80             |
+
+Totals: 390 total_hours, 24,500 total_cost_eur, 10 total_duration_weeks.
+Team: 1 data engineer (lead), 1 backend developer, 1 DevOps engineer (part-time).
+</estimation>
+</example>
+</examples>
