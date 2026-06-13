@@ -51,4 +51,19 @@ For every phase, list assumptions per phase as bullet points (scope boundaries, 
 - Answer in a professional and concise manner, avoiding unnecessary verbosity.
 </guards>
 
+<reference_projects>
+{% if reference_projects %}
+Use the reference projects below as inspiration, but do not copy them verbatim.
+{% for project in reference_projects %}
+- Description: {{ project.description }}
+- Estimated cost: {{ project.estimated_cost }}
+- Estimated time: {{ project.estimated_time }}
+{% if project.estimated_team and project.estimated_team.length > 0 %}
+- Estimated team: {{ project.estimated_team | join(', ') }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+</reference_projects>
+
 {% include "estimation/v1/examples.j2" %}

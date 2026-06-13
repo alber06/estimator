@@ -60,6 +60,8 @@ if "response" not in st.session_state:
     st.session_state.response = None
 if "estimation_error" not in st.session_state:
     st.session_state.estimation_error = None
+if "pending_request" not in st.session_state:
+    st.session_state.pending_request = None
 
 
 def fetch_estimation(

@@ -22,6 +22,14 @@ class PromptVersion(str, Enum):
     V1 = "v1"
     V2 = "v2"
 
+class ReferenceProject(BaseModel):
+    """Reference project for estimation."""
+
+    description: str = Field(..., description="Description of the reference project")
+    estimated_cost: float = Field(..., description="Estimated cost of the reference project in euros")
+    estimated_time: float = Field(..., description="Estimated time to complete the reference project in hours")
+    estimated_team: list[str] = Field(..., description="Estimated team size required for the reference project")
+
 class EstimationRequest(BaseModel):
     """Incoming request containing a project description to estimate."""
 
@@ -30,6 +38,10 @@ class EstimationRequest(BaseModel):
     project_type: ProjectType = Field(..., description="Project type")
     detail_level: DetailLevel = Field(..., description="Detail level")
     output_format: OutputFormat = Field(..., description="Output format")
+    reference_projects: list[ReferenceProject] | None = Field(
+        default=None,
+        description="Optional reference projects to guide the estimation",
+    )
 
 
 class EstimationResponse(BaseModel):
