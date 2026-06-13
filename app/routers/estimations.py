@@ -23,6 +23,16 @@ async def create_estimation(
     wrapper: LLMWrapper = Depends(get_llm_wrapper),
 ) -> EstimationResponse:
     """Receive a project description and return a software project estimation."""
+
+    log.info(
+        "create_estimation",
+        description=request.description,
+        project_type=request.project_type,
+        detail_level=request.detail_level,
+        output_format=request.output_format,
+        reference_projects=request.reference_projects,
+        prompt_version=prompt_version
+    )
     
     try:
         user_prompt, system_prompt = render_estimation_prompt(
@@ -47,6 +57,16 @@ async def create_estimation_stream(
     wrapper: LLMWrapper = Depends(get_llm_wrapper),
 ) -> EventSourceResponse:
     """Stream a software estimation token by token via Server-Sent Events."""
+
+    log.info(
+        "create_estimation_stream",
+        description=request.description,
+        project_type=request.project_type,
+        detail_level=request.detail_level,
+        output_format=request.output_format,
+        reference_projects=request.reference_projects,
+        prompt_version=prompt_version
+    )
 
     user_prompt, system_prompt = render_estimation_prompt(
         request=request,
