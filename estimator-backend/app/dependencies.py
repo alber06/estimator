@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.services.cache import EstimationCache
 from app.services.estimation import EstimationService
 from app.services.llm_wrapper import LLMWrapper
+from app.services.session import SessionStore
 
 log = structlog.get_logger()
 
@@ -92,3 +93,7 @@ def get_estimation_service() -> EstimationService:
         semantic_cache=get_semantic_cache(),
         openai_client=get_openai_client(),
     )
+
+@lru_cache
+def get_session_store() -> SessionStore:
+    return SessionStore()
