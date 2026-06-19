@@ -5,6 +5,7 @@ of the process. That volatility is deliberate at this stage as it keeps it simpl
 for us to prototype without adding extra complexity, which will be added at later stages.
 """
 
+from functools import lru_cache
 import uuid
 
 from app.schemas.session import Message, ProjectMetadata
@@ -79,3 +80,7 @@ class SessionStore:
 
     def delete(self, session_id: uuid.UUID) -> bool:
         return self._sessions.pop(session_id, None) is not None
+
+@lru_cache
+def get_session_store() -> SessionStore:
+    return SessionStore()
