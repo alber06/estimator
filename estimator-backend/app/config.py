@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     ESTIMATOR_API_BASE_URL: str = "http://localhost:8000"
 
+    # --- Session conversation state ---
+    SESSION_MAX_TURNS: int = 6
+
     @model_validator(mode="after")
     def validate_at_least_one_api_key(self) -> "Settings":
         """LiteLLM may try either provider via fallback, so we require at least one key."""

@@ -12,52 +12,18 @@ import uuid
 
 import structlog
 
-from app.prompts import render_extract_metadata_prompt
-from app.schemas.estimation import EstimationResult
+from app.config import get_settings
+from app.prompts import render_conversation_prompt, render_extract_metadata_prompt
+from app.schemas.estimation import (
+    DetailLevel,
+    EstimationResult,
+    OutputFormat,
+    ProjectType,
+)
 from app.schemas.session import Message, ProjectMetadata
 from app.services.llm_wrapper import LLMWrapper
 
 log = structlog.get_logger()
-
-DEFAULT_MAX_TURNS = 20
-
-
-class ConversationHistory:
-    """Sliding window of user/assistant messages."""
-
-    def __init__(
-        self,
-        *,
-        system_prompt: str = "",
-        max_turns: int = DEFAULT_MAX_TURNS,
-    ) -> None:
-        self.system_prompt = system_prompt
-        self.max_turns = max_turns
-        self._messages: list[Message] = []
-
-    @property
-    def messages(self) -> list[Message]:
-        """Non-system messages only, oldest first."""
-        return list(self._messages)
-
-    def set_system_prompt(self, content: str) -> None:
-        self.system_prompt = content
-
-    def append(self, message: Message) -> None:
-        self._messages.append(message)
-        while len(self._messages) > self.max_turns:
-            self._messages.pop(0)
-
-    def as_llm_messages(self) -> list[dict[str, str]]:
-        """Chat-completions shape: pinned system message plus the window."""
-
-        out: list[dict[str, str]] = []
-
-        if (self.system_prompt):
-            out.append({"role": "system", "content": self.system_prompt})
-
-        out.extend(m.model_dump() for m in self._messages)
-        return out
 
 
 def merge_project_metadata(
@@ -126,6 +92,77 @@ def update_project_metadata_from_estimation(
         changed_fields=changed_fields,
         **meta,
     )
+
+class ConversationHistory:
+    """Sliding window of user/assistant messages."""
+
+    def __init__(
+        self,
+        *,
+        system_prompt: str = "",
+        max_turns: int | None = None,
+    ) -> None:
+        self.system_prompt = system_prompt
+        self.max_turns = max_turns if max_turns is not None else get_settings().SESSION_MAX_TURNS
+        self._messages: list[Message] = []
+
+    @property
+    def messages(self) -> list[Message]:
+        """Non-system messages only, oldest first."""
+        return list(self._messages)
+
+    def set_system_prompt(self, content: str) -> None:
+        self.system_prompt = content
+
+    def append(self, *, user_message: Message, assistant_message: Message) -> None:
+        self._messages.append(user_message)
+        self._messages.append(assistant_message)
+        
+        max_messages = self.max_turns * 2
+        limit = len(self._messages) - max_messages
+        
+        if limit > 0:
+            if limit % 2 != 0:
+                limit += 1
+            del self._messages[:limit]
+
+    def as_llm_messages(self) -> list[dict[str, str]]:
+        """Chat-completions shape: pinned system message plus the window."""
+
+        out: list[dict[str, str]] = []
+
+        if (self.system_prompt):
+            out.append({"role": "system", "content": self.system_prompt})
+
+        out.extend(m.model_dump() for m in self._messages)
+        return out
+
+    def to_messages_list(
+        self,
+        *,
+        project_metadata: ProjectMetadata,
+        project_type: ProjectType,
+        detail_level: DetailLevel,
+        output_format: OutputFormat,
+    ) -> list[dict[str, str]]:
+        """Build chat-completions messages for the LLM API.
+
+        Regenerates the system prompt from the current ``project_metadata`` and
+        estimation settings, then appends the stored user/assistant turns.
+        """
+        metadata = project_metadata if project_metadata.has_content() else None
+        system_prompt, _ = render_conversation_prompt(
+            transcript="",
+            project_type=project_type,
+            detail_level=detail_level,
+            output_format=output_format,
+            project_metadata=metadata,
+        )
+        self.system_prompt = system_prompt
+
+        out: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        out.extend(m.model_dump() for m in self._messages)
+        return out
 
 
 class Session:

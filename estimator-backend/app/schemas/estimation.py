@@ -16,6 +16,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.session import Message, ProjectMetadata
+
 
 class ProjectType(str, Enum):
     MOBILE_APP = "mobile_app"
@@ -114,3 +116,5 @@ class EstimationResponse(BaseModel):
     result: EstimationResult
     prompt_version: str
     cached: bool = False
+    project_metadata: ProjectMetadata | None = None
+    messages: list[Message] | None = None

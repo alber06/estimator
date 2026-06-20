@@ -40,6 +40,7 @@ from app.schemas.estimation import (
     OutputFormat,
     ProjectType,
 )
+from app.schemas.session import Message
 from app.services.cache import EstimationCache
 from app.services.llm_wrapper import LLMWrapper
 from app.services.session import Session, update_project_metadata_from_estimation
@@ -195,5 +196,14 @@ class EstimationService:
             estimation_result=result,
             llm_wrapper=self.llm_wrapper,
         )
+        session.conversation_history.append(
+            user_message=Message(role="user", content=user_message),
+            assistant_message=Message(role="assistant", content=result.model_dump_json()),
+        )
 
-        return EstimationResponse(result=result, prompt_version="v2", cached=False)
+        return EstimationResponse(
+            result=result,
+            prompt_version="v2",
+            project_metadata=session.project_metadata,
+            messages=session.conversation_history.messages,
+        )

@@ -11,7 +11,7 @@ from app.schemas.estimation import (
     OutputFormat,
     ProjectType,
 )
-from app.schemas.session import ProjectMetadata
+from app.schemas.session import Message, ProjectMetadata
 from app.services.estimation import EstimationService
 from app.services.session import Session
 
@@ -93,3 +93,9 @@ def test_estimate_conversation_skips_cache_and_uses_v2(
     assert response.prompt_version == "v2"
     assert response.cached is False
     assert response.result.total_cost_eur == 30_000
+    assert response.project_metadata == session.project_metadata
+    assert response.messages is not None
+    assert len(response.messages) == 2
+    assert response.messages[0] == Message(role="user", content="user")
+    assert response.messages[1].role == "assistant"
+    assert "30_000" in response.messages[1].content or "30000" in response.messages[1].content

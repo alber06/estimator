@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from app.schemas.estimation import EstimationResult
-from app.schemas.session import ProjectMetadata
+from app.schemas.estimation import DetailLevel, EstimationResult, OutputFormat, ProjectType
+from app.schemas.session import Message, ProjectMetadata
 from app.services.session import (
+    ConversationHistory,
     Session,
     merge_project_metadata,
     update_project_metadata_from_estimation,
@@ -115,3 +116,30 @@ def test_update_project_metadata_from_estimation_swallows_llm_failures(
     )
 
     assert session.project_metadata.project_name == "KeepMe"
+
+
+def test_conversation_history_to_messages_list_regenerates_system_from_metadata() -> None:
+    history = ConversationHistory(max_turns=4)
+    history.append(Message(role="user", content="We need LoanDesk for equipment loans."))
+    history.append(Message(role="assistant", content="Estimated 8 weeks at 30k EUR."))
+
+    metadata = ProjectMetadata(
+        project_name="LoanDesk",
+        mentioned_technologies=["Python", "React"],
+        agreed_scope="MVP with auth",
+    )
+    messages = history.to_messages_list(
+        project_metadata=metadata,
+        project_type=ProjectType.WEB_SAAS,
+        detail_level=DetailLevel.MEDIUM,
+        output_format=OutputFormat.PHASES_TABLE,
+    )
+
+    assert messages[0]["role"] == "system"
+    assert "LoanDesk" in messages[0]["content"]
+    assert "MVP with auth" in messages[0]["content"]
+    assert messages[1:] == [
+        {"role": "user", "content": "We need LoanDesk for equipment loans."},
+        {"role": "assistant", "content": "Estimated 8 weeks at 30k EUR."},
+    ]
+    assert "LoanDesk" in history.system_prompt

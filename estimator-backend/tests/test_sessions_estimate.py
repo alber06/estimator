@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.dependencies import get_estimation_service
 from app.main import app
 from app.schemas.estimation import EstimationResponse, EstimationResult
+from app.schemas.session import Message, ProjectMetadata
 
 
 def _canned_result() -> EstimationResult:
@@ -47,10 +48,16 @@ class FakeEstimationService:
 
     def estimate_conversation(self, **kwargs) -> EstimationResponse:
         self.calls.append(kwargs)
+        session = kwargs["session"]
         return EstimationResponse(
             result=_canned_result(),
             prompt_version="v2",
             cached=False,
+            project_metadata=session.project_metadata,
+            messages=[
+                Message(role="user", content=kwargs["transcript"]),
+                Message(role="assistant", content=_canned_result().model_dump_json()),
+            ],
         )
 
 
@@ -83,6 +90,10 @@ def test_session_estimate_forwards_to_estimate_conversation(
     body = response.json()
     assert body["prompt_version"] == "v2"
     assert body["cached"] is False
+    assert body["project_metadata"] == ProjectMetadata().model_dump()
+    assert len(body["messages"]) == 2
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][1]["role"] == "assistant"
     assert len(fake_service.calls) == 1
     call = fake_service.calls[0]
     assert call["transcript"] == VALID_FORM["transcript"]
