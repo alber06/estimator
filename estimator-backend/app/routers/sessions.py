@@ -4,12 +4,13 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile
 from app.dependencies import get_estimation_service, get_session_store
 from app.services.session import SessionStore, Session
-from app.services.estimation import EstimationService, EstimationResponse
+from app.schemas.estimation import EstimationResponse
+from app.services.estimation import EstimationService
 from app.guardrails.input import InputGuardrailViolation
 
 
 from app.schemas.session import SessionResponse
-from app.schemas.estimation import EstimationRequest, ProjectType, DetailLevel, OutputFormat
+from app.schemas.estimation import ProjectType, DetailLevel, OutputFormat
 from app.services.content_extractor import UnsupportedFileTypeError, extract_content
 
 log = structlog.get_logger()
@@ -31,7 +32,8 @@ def create_estimation_in_session(
     detail_level: DetailLevel = Form(...),
     output_format: OutputFormat = Form(...),
     attachments: list[UploadFile] = File(default_factory=list),
-    service: EstimationService = Depends(get_estimation_service)
+    store: SessionStore = Depends(get_session_store),
+    service: EstimationService = Depends(get_estimation_service),
 ) -> EstimationResponse:
     """Run the full estimation pipeline and return the structured response."""
 
@@ -55,16 +57,18 @@ def create_estimation_in_session(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         description_with_attachments += f"\n--- attachment: {filename} ---\n{extracted}\n--- end attachment ---"
 
-
-    request = EstimationRequest(
-        description=description_with_attachments,
-        project_type=project_type,
-        detail_level=detail_level,
-        output_format=output_format,
-    )
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        return service.estimate(request)
+        return service.estimate_conversation(
+            transcript=description_with_attachments,
+            project_type=project_type,
+            detail_level=detail_level,
+            output_format=output_format,
+            session=session,
+        )
     except InputGuardrailViolation as exc:
         log.info(
             "estimation_blocked_by_input_guardrail",

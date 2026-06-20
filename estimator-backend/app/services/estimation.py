@@ -31,10 +31,18 @@ import structlog
 from app.cache.semantic import EstimationSemanticCache
 from app.guardrails.input import check_input
 from app.guardrails.output import enforce_scope_response
-from app.prompts import render_estimation_prompt
-from app.schemas.estimation import EstimationRequest, EstimationResponse, EstimationResult
+from app.prompts import render_conversation_prompt, render_estimation_prompt
+from app.schemas.estimation import (
+    DetailLevel,
+    EstimationRequest,
+    EstimationResponse,
+    EstimationResult,
+    OutputFormat,
+    ProjectType,
+)
 from app.services.cache import EstimationCache
 from app.services.llm_wrapper import LLMWrapper
+from app.services.session import Session, update_project_metadata_from_estimation
 
 log = structlog.get_logger()
 
@@ -139,3 +147,53 @@ class EstimationService:
         return EstimationResponse(
             result=result, prompt_version=self.prompt_version, cached=False
         )
+
+    def estimate_conversation(
+        self,
+        *,
+        transcript: str,
+        project_type: ProjectType,
+        detail_level: DetailLevel,
+        output_format: OutputFormat,
+        session: Session,
+    ) -> EstimationResponse:
+        check_input(transcript, openai_client=self.openai_client)
+
+        project_metadata = (
+            session.project_metadata
+            if session.project_metadata.has_content()
+            else None
+        )
+        system_prompt, user_message = render_conversation_prompt(
+            transcript=transcript,
+            project_type=project_type,
+            detail_level=detail_level,
+            output_format=output_format,
+            project_metadata=project_metadata,
+        )
+
+        result, meta = self.llm_wrapper.complete_structured(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            response_model=EstimationResult,
+        )
+        log.info(
+            "estimation_generated",
+            kind="conversation",
+            session_id=str(session.id),
+            confidence_pct=result.confidence_pct,
+            total_cost_eur=result.total_cost_eur,
+            phases=len(result.phases),
+            **meta,
+        )
+
+        result = enforce_scope_response(result)
+
+        update_project_metadata_from_estimation(
+            session,
+            transcript=transcript,
+            estimation_result=result,
+            llm_wrapper=self.llm_wrapper,
+        )
+
+        return EstimationResponse(result=result, prompt_version="v2", cached=False)

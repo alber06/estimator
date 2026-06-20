@@ -19,5 +19,13 @@ class ProjectMetadata(BaseModel):
     mentioned_technologies: list[str] = Field(default_factory=list)
     agreed_scope: str = ""
 
+    def has_content(self) -> bool:
+        return bool(
+            self.project_name
+            or self.assumed_team_size is not None
+            or self.mentioned_technologies
+            or self.agreed_scope
+        )
+
 class SessionResponse(BaseModel):
     session_id: uuid.UUID = Field(description="The ID of the session.")
