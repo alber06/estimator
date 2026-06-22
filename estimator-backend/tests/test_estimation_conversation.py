@@ -55,7 +55,10 @@ def test_estimate_conversation_skips_cache_and_uses_v2(
 ) -> None:
     mock_render.return_value = ("system", "user")
     llm_wrapper = MagicMock()
-    llm_wrapper.complete_structured.return_value = (_canned_result(), {"model": "gpt-4o-mini"})
+    llm_wrapper.complete_structured_with_messages.return_value = (
+        _canned_result(),
+        {"model": "gpt-4o-mini"},
+    )
     exact_cache = MagicMock()
     semantic_cache = MagicMock()
 
@@ -82,7 +85,14 @@ def test_estimate_conversation_skips_cache_and_uses_v2(
         output_format=OutputFormat.PHASES_TABLE,
         project_metadata=session.project_metadata,
     )
-    llm_wrapper.complete_structured.assert_called_once()
+    llm_wrapper.complete_structured_with_messages.assert_called_once()
+    call_kwargs = llm_wrapper.complete_structured_with_messages.call_args.kwargs
+    messages = call_kwargs["messages"]
+    assert messages[0]["role"] == "system"
+    assert "LoanDesk" in messages[0]["content"]
+    assert messages[-1] == {"role": "user", "content": "user"}
+    assert len(messages) == 2
+    llm_wrapper.complete_structured.assert_not_called()
     mock_update_metadata.assert_called_once()
     exact_cache.get.assert_not_called()
     exact_cache.set.assert_not_called()

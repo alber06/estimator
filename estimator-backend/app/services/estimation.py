@@ -165,7 +165,7 @@ class EstimationService:
             if session.project_metadata.has_content()
             else None
         )
-        system_prompt, user_message = render_conversation_prompt(
+        _, user_message = render_conversation_prompt(
             transcript=transcript,
             project_type=project_type,
             detail_level=detail_level,
@@ -173,9 +173,16 @@ class EstimationService:
             project_metadata=project_metadata,
         )
 
-        result, meta = self.llm_wrapper.complete_structured(
-            system_prompt=system_prompt,
-            user_message=user_message,
+        messages = session.conversation_history.to_messages_list(
+            project_metadata=session.project_metadata,
+            project_type=project_type,
+            detail_level=detail_level,
+            output_format=output_format,
+        )
+        messages.append({"role": "user", "content": user_message})
+
+        result, meta = self.llm_wrapper.complete_structured_with_messages(
+            messages=messages,
             response_model=EstimationResult,
         )
         log.info(

@@ -120,8 +120,10 @@ def test_update_project_metadata_from_estimation_swallows_llm_failures(
 
 def test_conversation_history_to_messages_list_regenerates_system_from_metadata() -> None:
     history = ConversationHistory(max_turns=4)
-    history.append(Message(role="user", content="We need LoanDesk for equipment loans."))
-    history.append(Message(role="assistant", content="Estimated 8 weeks at 30k EUR."))
+    history.append(
+        user_message=Message(role="user", content="We need LoanDesk for equipment loans."),
+        assistant_message=Message(role="assistant", content="Estimated 8 weeks at 30k EUR."),
+    )
 
     metadata = ProjectMetadata(
         project_name="LoanDesk",

@@ -3,10 +3,12 @@ and structured logging to every LLM call in the estimator.
 
 Design notes
 ------------
-- The wrapper exposes two primitives:
+- The wrapper exposes three primitives:
   - ``complete()``: legacy free-text answer (kept for tests that depend on it).
   - ``complete_structured()``: returns a validated Pydantic model via Instructor,
     re-prompting on validator errors up to ``max_retries`` times.
+  - ``complete_structured_with_messages()``: same as ``complete_structured`` but
+    accepts a full chat-completions message list (system + prior turns + new user).
 - The Router is configured with two deployments under the same ``model_name``
   ("estimator") so LiteLLM can switch from primary to fallback transparently.
   When the caller overrides the model per-request we bypass the Router and call
@@ -249,6 +251,70 @@ class LLMWrapper:
             model=meta["model"],
             provider=meta["provider"],
             latency_ms=latency_ms,
+        )
+        return result, meta
+
+    def complete_structured_with_messages(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        response_model: type[T],
+        model_override: str | None = None,
+        max_tokens: int = 4000,
+        max_retries: int = 6,
+    ) -> tuple[T, dict[str, Any]]:
+        """Run the LLM with Instructor over a full chat history.
+
+        ``messages`` must follow the chat-completions shape (``role`` + ``content``).
+        Typically the list is built from ``ConversationHistory.to_messages_list()``
+        plus the new user turn for the current transcript.
+        """
+        target_model = model_override or self.primary_model
+        api_key = (
+            self.anthropic_api_key
+            if _provider_from_model(target_model) == "anthropic"
+            else self.openai_api_key
+        )
+
+        log.info(
+            "llm_structured_call_started",
+            model=target_model,
+            response_model=response_model.__name__,
+            message_count=len(messages),
+        )
+        t0 = time.perf_counter()
+        try:
+            result = self._instructor.chat.completions.create(
+                model=target_model,
+                api_key=api_key,
+                timeout=self.timeout,
+                messages=messages,
+                response_model=response_model,
+                max_tokens=max_tokens,
+                max_retries=max_retries,
+            )
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            log.error(
+                "llm_structured_call_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                latency_ms=latency_ms,
+            )
+            raise
+
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        meta = {
+            "model": _normalise_model_name(target_model),
+            "provider": _provider_from_model(target_model),
+            "latency_ms": latency_ms,
+        }
+        log.info(
+            "llm_structured_call_completed",
+            model=meta["model"],
+            provider=meta["provider"],
+            latency_ms=latency_ms,
+            message_count=len(messages),
         )
         return result, meta
 

@@ -126,7 +126,43 @@ def test_thinking_budget_pads_max_tokens_when_anthropic_override(wrapper: LLMWra
     assert kwargs["max_tokens"] == 4096 + 1024
 
 
-# test_complete_stream_yields_chunks_and_caches was removed in Session 4 when
+def test_complete_structured_with_messages_calls_instructor(wrapper: LLMWrapper) -> None:
+    from app.schemas.estimation import EstimationResult
+
+    canned = EstimationResult(
+        summary="Small web app.",
+        total_duration_weeks=4,
+        total_cost_eur=10_000,
+        confidence_pct=80,
+        phases=[
+            {
+                "name": "Build",
+                "duration_weeks": 4,
+                "cost_eur": 10_000,
+                "summary": "Implement the MVP.",
+            }
+        ],
+    )
+    messages = [
+        {"role": "system", "content": "You estimate software projects."},
+        {"role": "user", "content": "Build a todo app."},
+    ]
+    with patch.object(
+        wrapper._instructor.chat.completions,
+        "create",
+        return_value=canned,
+    ) as mocked:
+        result, meta = wrapper.complete_structured_with_messages(
+            messages=messages,
+            response_model=EstimationResult,
+        )
+    assert mocked.call_count == 1
+    assert mocked.call_args.kwargs["messages"] == messages
+    assert result.total_cost_eur == 10_000
+    assert meta["model"] == "gpt-4o-mini"
+    assert meta["provider"] == "openai"
+
+
 # the /api/v1/estimate/stream endpoint and the wrapper's complete_stream() method
 # were deleted. Structured output via Instructor (complete_structured) replaces
 # token streaming; tests for that path live in test_estimate_endpoint.py with a
