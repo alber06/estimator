@@ -277,7 +277,7 @@ class LLMWrapper:
         )
 
         log.info(
-            "llm_structured_call_started",
+            "llm_structured_call_with_messages_started",
             model=target_model,
             response_model=response_model.__name__,
             message_count=len(messages),

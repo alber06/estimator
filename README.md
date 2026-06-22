@@ -137,7 +137,25 @@ Lo que vive **fuera** del template (en código): el contrato (`EstimationRequest
 > Este proyecto forma parte del **Master en AI Engineering** y es la base sobre la que se construye en directo el resto de la Sesión 04 (output estructurado, guardrails, cache semántico).
 
 
-## Decisiones arquitecturales
+## Respuestas del ejercicio
+
+### Como levantar el projecto
+
+1. Levantar el backend o bien con [Docker (recomendado)](#con-docker-recomendado) o en [sin docker](#sin-docker).
+2. Levantar el cliente [streamlit](#cliente-streamlit).
+
+
+### Decisiones arquitecturales
 
 1. Extraccion de datos de adjuntos: He optado por la opcion de extraer los datos usando librerias en local ya que me da mas control, aparte de que me permite aprender más y me prepara para la sección de RAG.
+
 2. Inyeccion de metadata en prompt: He usado la estrategia del LLM extractor ya que me parece más completa, además también de permitirme aprender más.
+
+### Tests de integracion
+
+Para ejecutar solo los tests HTTP de sesiones multi-turno:
+
+```bash
+uv run pytest tests/test_sessions_integration.py
+```
+

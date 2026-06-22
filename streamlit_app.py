@@ -36,14 +36,13 @@ def ensure_session() -> str:
     if "session_id" not in st.session_state:
         st.session_state.session_id = create_session()
         st.session_state.project_metadata = {}
-        st.session_state.messages = []
     return st.session_state.session_id
 
 
 def render_estimation_result(body: dict) -> None:
     result = body["result"]
     prompt_version = body.get("prompt_version", "?")
-
+    print(body)
     st.markdown(
         f"**Prompt version:** `{prompt_version}` · "
         f"**Confidence:** {result['confidence_pct']}%"
@@ -135,7 +134,6 @@ if submitted:
                 st.error(f"Could not reach the estimator at `{estimate_url}`: {exc}")
             else:
                 st.session_state.project_metadata = body.get("project_metadata") or {}
-                st.session_state.messages = body.get("messages") or []
                 st.session_state.last_result = body
                 render_estimation_result(body)
 
@@ -153,18 +151,9 @@ with st.sidebar:
     st.markdown("**Memoria (project_metadata)**")
     st.json(st.session_state.get("project_metadata", {}))
 
-    messages = st.session_state.get("messages", [])
-    if not messages:
-        st.caption("No messages yet.")
-    else:
-        for message in messages:
-            label = "User" if message["role"] == "user" else "Assistant"
-            st.markdown(f"**{label}:** {truncate_content(message['content'])}")
-
     if st.button("Nueva conversación"):
         st.session_state.session_id = create_session()
         st.session_state.project_metadata = {}
-        st.session_state.messages = []
         st.session_state.pop("last_result", None)
         st.rerun()
 

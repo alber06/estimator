@@ -1,14 +1,72 @@
-# Master Compose for the monorepo. Pulls in each subproject's compose via the
-# `include:` directive (Compose v2.20+). Running `docker compose up` from this
-# directory launches all services on a single shared network, so cross-service
-# calls (e.g. Rails -> FastAPI via http://estimator:8000) just work.
-#
-# IMPORTANT: each subproject can also be launched in isolation by running
-# `docker compose up` from its own directory. Doing so creates a SEPARATE
-# Compose project (and therefore separate named volumes), so the database from
-# one mode is not visible from the other. Pick one mode per workflow and stick
-# with it.
+# Docker Compose configuration for local development.
+# For production, remove the bind mount and the --reload flag.
 
-include:
-  - estimator-backend/docker-compose.yml
-  - estimator-web/docker-compose.yml
+services:
+  estimator:
+    build: .
+    container_name: estimator
+    ports:
+      - "8000:8000"
+
+    # Load environment variables (API keys, config) from the local .env file.
+    env_file:
+      - .env
+
+    # Override REDIS_URL for the in-network Redis service. The .env value
+    # (redis://localhost:6379) is meant for running uvicorn outside Docker.
+    environment:
+      REDIS_URL: redis://redis:6379
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    # Bind-mount the app/ directory so code changes are reflected immediately
+    # inside the container without rebuilding the image. Tests too, so we can
+    # run `pytest` against the live container during development.
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+
+    # Override the default CMD to enable auto-reload on file changes.
+    # Remove --reload for production deployments.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+    restart: unless-stopped
+
+    networks:
+      - default
+      - estimator_shared
+
+    # Health check using Python's stdlib (curl is not available in slim images).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  redis:
+    # Redis Stack bundles the RediSearch + RedisJSON modules that redisvl uses
+    # to do vector similarity queries for the semantic cache. The vanilla
+    # ``redis:7-alpine`` image does NOT ship these modules.
+    image: redis/redis-stack:7.4.0-v0
+    container_name: estimator-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"  # RedisInsight UI (handy during the live demo)
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+networks:
+  estimator_shared:
+    name: estimator_shared
