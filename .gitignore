@@ -26,3 +26,5 @@ venv/
 
 # Session guides / docs
 docs/
+
+/evals/stress/fixtures/pdfs/*
