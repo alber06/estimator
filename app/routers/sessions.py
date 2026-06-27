@@ -141,14 +141,8 @@ async def _resolve_session_and_enrich(
             extracted.append((upload.filename, text))
 
     enriched = enrich_transcript(transcript=transcript, attachments=extracted)
-    log.info(
-        "session_estimate_received",
-        session_id=session_id,
-        transcript_chars=len(transcript),
-        enriched_transcript_chars=len(enriched),
-        attachment_count=len(extracted),
-    )
-    return session, enriched
+    attachments_total_chars = sum(len(text) for _, text in extracted)
+    return session, enriched, attachments_total_chars
 
 
 def _map_pipeline_errors(exc: Exception) -> HTTPException:
@@ -182,7 +176,7 @@ async def estimate_in_session(
     store: SessionStore = Depends(get_session_store),
     service: EstimationService = Depends(get_estimation_service),
 ) -> EstimationResponse:
-    session, enriched = await _resolve_session_and_enrich(
+    session, enriched, attachments_total_chars = await _resolve_session_and_enrich(
         session_id, transcript, attachments, store
     )
     try:
@@ -193,6 +187,7 @@ async def estimate_in_session(
             detail_level=detail_level,
             output_format=output_format,
             tier=tier,
+            attachments_total_chars=attachments_total_chars,
         )
     except HTTPException:
         raise
@@ -218,7 +213,7 @@ async def estimate_in_session_acb(
     iteration trail (verdict, confidence, issues per round) so callers can
     show the audit trail in their UI.
     """
-    session, enriched = await _resolve_session_and_enrich(
+    session, enriched, _attachments_total_chars = await _resolve_session_and_enrich(
         session_id, transcript, attachments, store
     )
     try:

@@ -169,5 +169,10 @@ class Session(BaseModel):
     history: ConversationHistory = Field(default_factory=ConversationHistory)
     metadata: ProjectMetadata = Field(default_factory=ProjectMetadata)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    turn_number: int = Field(
+        default=1,
+        ge=1,
+        description="1-based index of the next turn to process.",
+    )
     last_resolved_tier: str | None = None
     last_tier_rule: str | None = None

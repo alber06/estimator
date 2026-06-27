@@ -60,7 +60,7 @@ class CumulativeSummarizer:
         )
 
         try:
-            envelope, meta = self.llm_wrapper.complete_structured_chat(
+            envelope, _meta = self.llm_wrapper.complete_structured_chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message},
@@ -78,12 +78,4 @@ class CumulativeSummarizer:
             )
             return previous_summary or ""
 
-        log.info(
-            "summarizer_completed",
-            evicted_count=len(evicted),
-            previous_chars=len(previous_summary or ""),
-            new_chars=len(envelope.summary),
-            model=meta.get("model"),
-            latency_ms=meta.get("latency_ms"),
-        )
         return envelope.summary

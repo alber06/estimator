@@ -19,13 +19,9 @@ The policy is intentionally idempotent: a second call with no change to
 
 from __future__ import annotations
 
-import structlog
-
 from app.sessions.compression.anchors import AnchorDetector
 from app.sessions.compression.summarizer import CumulativeSummarizer
 from app.sessions.models import ConversationHistory, Message
-
-log = structlog.get_logger()
 
 
 class CompressionPolicy:
@@ -49,7 +45,6 @@ class CompressionPolicy:
             return
 
         evicted_for_summary: list[Message] = []
-        promoted_anchor_rules: list[list[str]] = []
 
         while len(history.messages) > history.max_turns * 2:
             # Pair-safe pop: with even-length messages and alternating roles,
@@ -63,7 +58,6 @@ class CompressionPolicy:
             if match.is_anchor:
                 history.anchors.append(user_msg)
                 history.anchors.append(assistant_msg)
-                promoted_anchor_rules.append(match.matched_rules)
             else:
                 evicted_for_summary.append(user_msg)
                 evicted_for_summary.append(assistant_msg)
@@ -75,16 +69,6 @@ class CompressionPolicy:
                 previous_summary=history.summary,
                 evicted=evicted_for_summary,
             )
-
-        log.info(
-            "history_compressed",
-            promoted_anchors=len(promoted_anchor_rules),
-            anchor_rules=[r for rules in promoted_anchor_rules for r in rules],
-            evicted_to_summary=len(evicted_for_summary),
-            summary_chars=len(history.summary or ""),
-            anchors_count=len(history.anchors),
-            recent_messages=len(history.messages),
-        )
 
 
 def apply_compression(

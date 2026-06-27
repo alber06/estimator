@@ -55,6 +55,13 @@ from app.sessions.tier_resolver import Tier, resolve_tier
 log = structlog.get_logger()
 
 
+def _cache_hit_kind(meta: dict[str, Any]) -> str:
+    """Map wrapper meta to the turn_observed cache_hit_kind vocabulary."""
+    if meta.get("cache_hit"):
+        return "exact"
+    return "none"
+
+
 def _exact_cache_key(request: EstimationRequest, prompt_version: str, model: str) -> str:
     """Deterministic SHA-256 key over the typed request + prompt_version + model."""
     payload = json.dumps(
@@ -177,6 +184,7 @@ class EstimationService:
         detail_level: DetailLevel,
         output_format: OutputFormat,
         tier: Tier | None = None,
+        attachments_total_chars: int = 0,
     ) -> EstimationResponse:
         """Multi-turn estimation pipeline (Session 5).
 
@@ -266,6 +274,26 @@ class EstimationService:
             result=result,
             llm_wrapper=self.llm_wrapper,
             model=self.metadata_extractor_model,
+        )
+
+        turn_index = session.turn_number
+        session.turn_number += 1
+        usage = meta.get("usage") or {}
+        log.info(
+            "turn_observed",
+            turn_index=turn_index,
+            session_id=session.session_id,
+            enriched_transcript_chars=len(transcript),
+            attachments_total_chars=attachments_total_chars,
+            messages_in_window=len(session.history.messages),
+            anchors_count=len(session.history.anchors),
+            summary_chars=len(session.history.summary or ""),
+            tokens_in=int(usage.get("input_tokens", 0)),
+            tokens_out=int(usage.get("output_tokens", 0)),
+            cost_usd=float(meta.get("cost_usd", 0.0)),
+            latency_ms=int(meta.get("latency_ms", 0)),
+            cache_hit_kind=_cache_hit_kind(meta),
+            last_resolved_tier=session.last_resolved_tier,
         )
 
         return EstimationResponse(
