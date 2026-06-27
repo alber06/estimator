@@ -37,8 +37,33 @@ class Settings(BaseSettings):
 
     ESTIMATOR_API_BASE_URL: str = "http://localhost:8000"
 
-    # --- Session conversation state ---
-    SESSION_MAX_TURNS: int = 6
+    # --- Session 5 fields (conversational memory + attachments) ---
+    # MAX_CONVERSATION_TURNS counts user+assistant pairs. The system prompt is
+    # always preserved as an invariant on top of the window.
+    MAX_CONVERSATION_TURNS: int = 6
+    # Hard cap per extracted attachment (in characters) to protect the context
+    # window. Real chunking enters in module 3.
+    MAX_ATTACHMENT_CHARS: int = 60_000
+    # The metadata extractor runs once per turn; a small/cheap model is enough.
+    METADATA_EXTRACTOR_MODEL: str = "gpt-4o-mini"
+
+    # --- Session 5 live: compression + tier + ACB ---
+    # Anchor detector: "heuristic" (regex over key phrases) or "llm" (binary
+    # classifier via Instructor). Heuristic is the default for cost.
+    ANCHOR_DETECTION_MODE: Literal["heuristic", "llm"] = "heuristic"
+    # Cheap model used by the cumulative summarizer (history compression).
+    COMPRESSION_MODEL: str = "gpt-4o-mini"
+    # Conversational prompt version used by ``estimate_conversational``.
+    # v2 = pre-live-session baseline. v3 = adds <audience> block driven by tier
+    # and an optional <critic_feedback> block consumed by the Boss.
+    CONVERSATIONAL_PROMPT_VERSION: str = "v3"
+    # Critic model (read-only auditor; cheap is fine).
+    CRITIC_MODEL: str = "gpt-4o-mini"
+    # Max iterations the Boss can drive (each iteration = 1 actor + 1 critic call).
+    # Three is the practical floor: one initial draft + two directed retries.
+    # With only two iterations the actor often cannot address all flagged issues
+    # in the single available retry, and the loop falls back without converging.
+    BOSS_MAX_ITERATIONS: int = 3
 
     @model_validator(mode="after")
     def validate_at_least_one_api_key(self) -> "Settings":

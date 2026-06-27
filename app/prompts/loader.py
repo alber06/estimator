@@ -7,7 +7,6 @@ call site (``version="v2"``), not a code refactor.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -19,7 +18,7 @@ from app.schemas.estimation import (
     OutputFormat,
     ProjectType,
 )
-from app.schemas.session import ProjectMetadata
+from app.sessions.models import ProjectMetadata
 
 _BASE_DIR = Path(__file__).resolve().parent
 
@@ -54,55 +53,101 @@ def render_estimation_prompt(
     return system, user
 
 
-def render_conversation_prompt(
+def render_conversational_prompt(
     *,
-    transcript: str,
+    description: str,
     project_type: ProjectType,
     detail_level: DetailLevel,
     output_format: OutputFormat,
-    project_metadata: ProjectMetadata | None = None,
+    metadata: ProjectMetadata,
     version: str = "v2",
+    tier: object | None = None,
+    critic_feedback: object | None = None,
 ) -> tuple[str, str]:
-    """Render system/user prompts for session-scoped conversation estimation.
+    """Render the conversational system/user prompts.
 
-    Returns:
-        A tuple ``(system_prompt, user_prompt)`` ready to be sent to the LLM
-        as separate ``role: "system"`` and ``role: "user"`` messages.
+    v2 (Session 5 exercise) carries only ``<project_metadata>``.
+    v3 (Session 5 live) adds the ``<audience>`` block driven by ``tier`` and
+    the optional ``<critic_feedback>`` block consumed by the Boss
+    orchestrator. Both blocks degrade gracefully if their inputs are missing.
     """
     context = {
-        "description": transcript,
+        "description": description,
         "project_type": project_type.value,
         "detail_level": detail_level.value,
         "output_format": output_format.value,
-        "project_metadata": project_metadata,
+        "metadata": metadata,
+        "metadata_is_empty": metadata.is_empty(),
+        "tier": tier.value if hasattr(tier, "value") else (tier or "default"),
+        "critic_feedback": critic_feedback,
     }
     system = _env.get_template(f"estimation/{version}/system.j2").render(**context)
     user = _env.get_template(f"estimation/{version}/user.j2").render(**context)
     return system, user
 
 
-def render_extract_metadata_prompt(
+def render_conversation_summary_prompt(
     *,
-    transcript: str,
-    estimation: EstimationResult,
-    existing_metadata: ProjectMetadata | None = None,
+    previous_summary: str | None,
+    evicted: list,
     version: str = "v1",
 ) -> tuple[str, str]:
-    """Render system/user prompts for project metadata extraction.
+    """Render the prompts used by the ``CumulativeSummarizer``.
 
-    Returns:
-        A tuple ``(system_prompt, user_prompt)`` ready to be sent to the LLM
-        as separate ``role: "system"`` and ``role: "user"`` messages.
+    ``evicted`` is a list of ``Message``-like objects (``role``, ``content``).
+    """
+    context = {
+        "previous_summary": previous_summary or "",
+        "evicted": evicted,
+    }
+    system = _env.get_template(f"conversation_summary/{version}/system.j2").render(**context)
+    user = _env.get_template(f"conversation_summary/{version}/user.j2").render(**context)
+    return system, user
+
+
+def render_critic_prompt(
+    *,
+    transcript: str,
+    metadata: ProjectMetadata,
+    tier: object,
+    result: EstimationResult,
+    version: str = "v1",
+) -> tuple[str, str]:
+    """Render the Critic prompts (Session 5 live).
+
+    ``tier`` can be a ``Tier`` enum or its string value; both are accepted.
     """
     context = {
         "transcript": transcript,
-        "estimation_json": json.dumps(
-            estimation.model_dump(mode="json"),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        "existing_metadata": existing_metadata,
+        "metadata": metadata,
+        "tier": tier.value if hasattr(tier, "value") else str(tier),
+        "result": result,
     }
-    system = _env.get_template(f"extract_prompt/{version}/system.j2").render(**context)
-    user = _env.get_template(f"extract_prompt/{version}/user.j2").render(**context)
+    system = _env.get_template(f"critic/{version}/system.j2").render(**context)
+    user = _env.get_template(f"critic/{version}/user.j2").render(**context)
+    return system, user
+
+
+def render_metadata_extraction_prompt(
+    *,
+    transcript: str,
+    result: EstimationResult,
+    previous: ProjectMetadata,
+    version: str = "v1",
+) -> tuple[str, str]:
+    """Render the prompts used by the metadata extractor (Session 5).
+
+    The extractor is a second LLM call per turn: it reads the latest user
+    transcript and assistant estimation, plus the metadata accumulated so far,
+    and returns a partial ``ProjectMetadata`` Pydantic object (Instructor).
+    """
+    context = {
+        "transcript": transcript,
+        "result": result,
+        "phases": result.phases,
+        "previous": previous,
+        "previous_is_empty": previous.is_empty(),
+    }
+    system = _env.get_template(f"metadata_extraction/{version}/system.j2").render(**context)
+    user = _env.get_template(f"metadata_extraction/{version}/user.j2").render(**context)
     return system, user

@@ -16,8 +16,6 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.schemas.session import Message, ProjectMetadata
-
 
 class ProjectType(str, Enum):
     MOBILE_APP = "mobile_app"
@@ -116,5 +114,17 @@ class EstimationResponse(BaseModel):
     result: EstimationResult
     prompt_version: str
     cached: bool = False
-    project_metadata: ProjectMetadata | None = None
-    messages: list[Message] | None = None
+
+
+from app.schemas.acb import BossTrace  # noqa: E402
+
+
+class ACBResponse(EstimationResponse):
+    """Conversational response with the Actor-Critic-Boss audit trail.
+
+    Same shape as ``EstimationResponse`` plus the ``acb`` field carrying the
+    iteration log. The UI uses the trail to render an expander showing what
+    the Critic flagged at each step and how the Boss decided.
+    """
+
+    acb: BossTrace

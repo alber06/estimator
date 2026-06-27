@@ -34,10 +34,6 @@ services:
 
     restart: unless-stopped
 
-    networks:
-      - default
-      - estimator_shared
-
     # Health check using Python's stdlib (curl is not available in slim images).
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -66,7 +62,3 @@ services:
 
 volumes:
   redis_data:
-
-networks:
-  estimator_shared:
-    name: estimator_shared

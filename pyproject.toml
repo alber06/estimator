@@ -20,8 +20,9 @@ dependencies = [
     "streamlit>=1.40",
     "httpx>=0.27",
     "jinja2>=3.1",
-    "pypdf>=6.13.3",
-    "python-docx>=1.2.0",
+    "python-multipart>=0.0.9",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
 ]
 
 [dependency-groups]
@@ -31,6 +32,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.5",
     "fakeredis>=2.20",
+    "deepeval>=1.0",
 ]
 
 [tool.ruff]
@@ -40,8 +42,3 @@ target-version = "py311"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-pythonVersion = "3.11"
