@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 
 Role = Literal["user", "assistant"]
+CacheHitKind = Literal["exact", "semantic", "none"]
 
 
 class Message(BaseModel):
@@ -153,6 +154,28 @@ class ProjectMetadata(BaseModel):
         )
 
 
+class TurnObserved(BaseModel):
+    """Per-turn telemetry emitted after a conversational estimate completes.
+
+    Mirrors the ``turn_observed`` structlog event so stress evals can read
+    latency/cost from ``GET /sessions/{id}`` instead of scraping logs.
+    """
+
+    turn_index: int = Field(ge=1)
+    session_id: str
+    enriched_transcript_chars: int = Field(default=0, ge=0)
+    attachments_total_chars: int = Field(default=0, ge=0)
+    messages_in_window: int = Field(default=0, ge=0)
+    anchors_count: int = Field(default=0, ge=0)
+    summary_chars: int = Field(default=0, ge=0)
+    tokens_in: int = Field(default=0, ge=0)
+    tokens_out: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    latency_ms: int = Field(default=0, ge=0)
+    cache_hit_kind: CacheHitKind = "none"
+    last_resolved_tier: str | None = None
+
+
 class Session(BaseModel):
     """A conversational estimation session.
 
@@ -176,3 +199,4 @@ class Session(BaseModel):
     )
     last_resolved_tier: str | None = None
     last_tier_rule: str | None = None
+    last_turn_observed: TurnObserved | None = None

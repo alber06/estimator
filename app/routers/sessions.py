@@ -41,7 +41,7 @@ from app.schemas.estimation import (
     ProjectType,
 )
 from app.services.estimation import EstimationService
-from app.sessions.models import ProjectMetadata
+from app.sessions.models import Message, ProjectMetadata, TurnObserved
 from app.sessions.store import SessionNotFoundError, SessionStore
 from app.sessions.tier_resolver import Tier
 
@@ -63,6 +63,21 @@ class SessionInfoResponse(BaseModel):
     summary_chars: int = 0
     last_resolved_tier: str | None = None
     last_tier_rule: str | None = None
+    turn_number: int = Field(
+        description="1-based index of the next turn to process.",
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Cumulative summary of folded-away turns (for memory-drift evals).",
+    )
+    anchors: list[Message] = Field(
+        default_factory=list,
+        description="Durable anchor messages kept outside the sliding window.",
+    )
+    last_turn: TurnObserved | None = Field(
+        default=None,
+        description="Telemetry from the most recently completed turn.",
+    )
 
 
 @router.post("", response_model=CreateSessionResponse, status_code=201)
@@ -92,6 +107,10 @@ def get_session(
         summary_chars=len(session.history.summary or ""),
         last_resolved_tier=session.last_resolved_tier,
         last_tier_rule=session.last_tier_rule,
+        turn_number=session.turn_number,
+        summary=session.history.summary,
+        anchors=list(session.history.anchors),
+        last_turn=session.last_turn_observed,
     )
 
 

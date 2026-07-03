@@ -4,7 +4,8 @@ Session 4 contract: typed form-style request maps to a typed, validated
 ``EstimationResult`` (structured output via Instructor + Pydantic). Two model
 validators enforce business rules that the LLM cannot break:
 
-1. The cost of all phases must sum to ``total_cost_eur``.
+1. The cost of all phases must sum to ``total_cost_eur`` (auto-repaired when the
+   model picks a mismatched total).
 2. Low-confidence answers (< 30%) must declare it explicitly by starting the
    summary with ``"Out of scope:"``.
 
@@ -14,7 +15,7 @@ When the LLM violates a validator, Instructor re-prompts the model with the
 
 from enum import Enum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ProjectType(str, Enum):
@@ -64,6 +65,15 @@ class Phase(BaseModel):
     cost_eur: int = Field(ge=0, le=1_000_000)
     summary: str = Field(min_length=10, max_length=600)
 
+    @field_validator("duration_weeks", mode="before")
+    @classmethod
+    def clamp_zero_duration_weeks(cls, value: object) -> object:
+        # ponytail: gpt-4o-mini often emits 0 for "Launch"; clamp once here
+        # instead of burning Instructor retries on a predictable mistake.
+        if value == 0:
+            return 1
+        return value
+
 
 class EstimationResult(BaseModel):
     """Structured estimation. The two validators below are the business rules
@@ -88,10 +98,9 @@ class EstimationResult(BaseModel):
     def phases_sum_matches_total(self) -> "EstimationResult":
         phase_sum = sum(p.cost_eur for p in self.phases)
         if phase_sum != self.total_cost_eur:
-            raise ValueError(
-                f"phases sum ({phase_sum} EUR) does not match total_cost_eur "
-                f"({self.total_cost_eur} EUR); adjust either the phases or the total"
-            )
+            # ponytail: trust per-phase costs (generated first) over the total
+            # field; gpt-4o-mini routinely back-fits a round total incorrectly.
+            self.total_cost_eur = phase_sum
         return self
 
     @model_validator(mode="after")

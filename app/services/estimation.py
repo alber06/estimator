@@ -49,7 +49,7 @@ from app.services.critic import Critic
 from app.services.llm_wrapper import LLMWrapper
 from app.sessions.compression import apply_compression
 from app.sessions.metadata_extractor import update_metadata
-from app.sessions.models import Session
+from app.sessions.models import Session, TurnObserved
 from app.sessions.tier_resolver import Tier, resolve_tier
 
 log = structlog.get_logger()
@@ -279,8 +279,7 @@ class EstimationService:
         turn_index = session.turn_number
         session.turn_number += 1
         usage = meta.get("usage") or {}
-        log.info(
-            "turn_observed",
+        observed = TurnObserved(
             turn_index=turn_index,
             session_id=session.session_id,
             enriched_transcript_chars=len(transcript),
@@ -295,6 +294,8 @@ class EstimationService:
             cache_hit_kind=_cache_hit_kind(meta),
             last_resolved_tier=session.last_resolved_tier,
         )
+        session.last_turn_observed = observed
+        log.info("turn_observed", **observed.model_dump())
 
         return EstimationResponse(
             result=result,
