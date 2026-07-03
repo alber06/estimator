@@ -70,8 +70,8 @@ def _check_moderation(description: str, openai_client: Any) -> None:
     try:
         response = openai_client.moderations.create(input=description)
     except Exception as exc:  # noqa: BLE001 — network/auth failures fail open with a log
-        log.warning(
-            "moderation_call_failed",
+        log.error(
+            "moderation_call_failed_failing_open",
             error_type=type(exc).__name__,
             error=str(exc),
         )
