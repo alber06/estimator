@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers import estimations, ingestion, sessions
-
+from app.embedding_pipeline.router import router as embedding_pipeline_router
 
 def configure_logging() -> None:
     """Set up structlog: JSON in production, human-readable in development."""
@@ -78,6 +78,7 @@ app.add_middleware(
 app.include_router(estimations.router)
 app.include_router(sessions.router)
 app.include_router(ingestion.router)
+app.include_router(embedding_pipeline_router)
 
 
 @app.get("/health")
