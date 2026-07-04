@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from functools import lru_cache
+
+from fastapi import APIRouter, Depends, HTTPException
 import structlog
 
 from app.embedding_pipeline.chunker import JSONStructuralChunker
@@ -10,16 +12,27 @@ log = structlog.get_logger()
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
 
 
+@lru_cache
+def get_chunker() -> JSONStructuralChunker:
+    return JSONStructuralChunker()
+
+
+@lru_cache
+def get_embedder() -> OpenAIEmbedder:
+    return OpenAIEmbedder()
+
+
 @router.post("/ingest", response_model=IngestResponse)
 def ingest_embeddings(
     request: IngestRequest,
-    chunker: JSONStructuralChunker = JSONStructuralChunker(),
-    embedder: OpenAIEmbedder = OpenAIEmbedder(),
+    chunker: JSONStructuralChunker = Depends(get_chunker),
+    embedder: OpenAIEmbedder = Depends(get_embedder),
 ) -> IngestResponse:
     """Ingest a list of embeddings into the database."""
     chunks = chunker.chunk(request.budgets)
     try:
         embedded_chunks, stats = embedder.embed_many(chunks)
+        stats.total_budgets = len(request.budgets)
     except Exception as exc:
         log.error(
             "embedding_ingest_failed",

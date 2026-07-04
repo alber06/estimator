@@ -30,6 +30,7 @@ services:
     # under alembic/versions/, both expected to survive a container restart.
     volumes:
       - ./app:/app/app
+      - ./scripts:/app/scripts
       - ./tests:/app/tests
       - ./data:/app/data
       - ./alembic:/app/alembic

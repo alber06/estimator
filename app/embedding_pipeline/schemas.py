@@ -29,6 +29,7 @@ class Budget(BaseModel):
     project_summary: str = Field(min_length=1, max_length=1024)
     main_technology: str = Field(min_length=1, max_length=128)
     year: int = Field(ge=1980, le=2100)
+    components: list[BudgetComponent] = Field(min_length=1)
 
 class Chunk(BaseModel):
     """A chunk from a budget."""

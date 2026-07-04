@@ -63,6 +63,37 @@ uv run streamlit run streamlit_app.py
 
 La URL del servicio se lee de `ESTIMATOR_API_BASE_URL` (default `http://localhost:8000`).
 
+## Comparar similitud coseno entre textos
+
+`scripts/compare.py` embedea dos textos con `OpenAIEmbedder` y calcula la similitud coseno (producto escalar / producto de normas, sin numpy).
+
+Fuera del contenedor (carga `.env` vía `get_settings()`):
+
+```bash
+cd estimator
+uv run python scripts/compare.py \
+  --text-a "OAuth 2.0 authentication backend for fintech" \
+  --text-b "JWT-based authorization service for banking app"
+```
+
+Dentro del contenedor (con `docker compose up` en marcha):
+
+```bash
+docker compose exec estimator python scripts/compare.py \
+  --text-a "OAuth 2.0 authentication backend for fintech" \
+  --text-b "JWT-based authorization service for banking app"
+```
+
+Salida de ejemplo:
+
+```
+Text A: OAuth 2.0 authentication backend for fintech
+Text B: JWT-based authorization service for banking app
+Cosine similarity: 0.8421
+```
+
+Requiere `OPENAI_API_KEY` en `.env` (o en el `env_file` del servicio `estimator`).
+
 ## Cómo testar
 
 ```bash
