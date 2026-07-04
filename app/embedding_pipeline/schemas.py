@@ -2,13 +2,16 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from typing import Any
 
 
 
 class BudgetComponent(BaseModel):
     """A single component of a budget."""
+    component_id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1, max_length=1024)
+    tech_stack: list[str] = Field(min_length=1, max_length=128)
     estimated_hours: int = Field(ge=0, le=2000)
     complexity: Literal["low", "medium", "high"] = Field(default="medium")
     dependencies: list[str] = Field(default_factory=list)
@@ -31,7 +34,7 @@ class Chunk(BaseModel):
     """A chunk from a budget."""
     chunk_id: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=1024)
-    metadata: dict[str, any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     token_count: int = Field(ge=0)
 
 class EmbeddedChunk(Chunk):
