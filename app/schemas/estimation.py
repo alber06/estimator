@@ -4,8 +4,7 @@ Session 4 contract: typed form-style request maps to a typed, validated
 ``EstimationResult`` (structured output via Instructor + Pydantic). Two model
 validators enforce business rules that the LLM cannot break:
 
-1. The cost of all phases must sum to ``total_cost_eur`` (auto-repaired when the
-   model picks a mismatched total).
+1. The cost of all phases must sum to ``total_cost_eur``.
 2. Low-confidence answers (< 30%) must declare it explicitly by starting the
    summary with ``"Out of scope:"``.
 
@@ -14,8 +13,9 @@ When the LLM violates a validator, Instructor re-prompts the model with the
 """
 
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProjectType(str, Enum):
@@ -65,15 +65,6 @@ class Phase(BaseModel):
     cost_eur: int = Field(ge=0, le=1_000_000)
     summary: str = Field(min_length=10, max_length=600)
 
-    @field_validator("duration_weeks", mode="before")
-    @classmethod
-    def clamp_zero_duration_weeks(cls, value: object) -> object:
-        # ponytail: gpt-4o-mini often emits 0 for "Launch"; clamp once here
-        # instead of burning Instructor retries on a predictable mistake.
-        if value == 0:
-            return 1
-        return value
-
 
 class EstimationResult(BaseModel):
     """Structured estimation. The two validators below are the business rules
@@ -98,9 +89,10 @@ class EstimationResult(BaseModel):
     def phases_sum_matches_total(self) -> "EstimationResult":
         phase_sum = sum(p.cost_eur for p in self.phases)
         if phase_sum != self.total_cost_eur:
-            # ponytail: trust per-phase costs (generated first) over the total
-            # field; gpt-4o-mini routinely back-fits a round total incorrectly.
-            self.total_cost_eur = phase_sum
+            raise ValueError(
+                f"phases sum ({phase_sum} EUR) does not match total_cost_eur "
+                f"({self.total_cost_eur} EUR); adjust either the phases or the total"
+            )
         return self
 
     @model_validator(mode="after")
@@ -116,13 +108,47 @@ class EstimationResult(BaseModel):
         return self
 
 
+class TurnObservation(BaseModel):
+    """Per-turn telemetry attached to a conversational response.
+
+    Populated by ``estimate_conversational`` only; the non-conversational
+    endpoint leaves ``EstimationResponse.observation`` as ``None``. The stress
+    runner reads this field directly from the JSON response — no log parsing.
+
+    ``cache_hit_kind`` is always ``"none"`` for the conversational path
+    (sessions bypass both caches by design); the field is kept for symmetry
+    with the non-conversational endpoint and to document that choice.
+    """
+
+    turn_index: int = Field(ge=1)
+    session_id: str
+    enriched_transcript_chars: int = Field(ge=0)
+    attachments_total_chars: int = Field(ge=0)
+    messages_in_window: int = Field(ge=0)
+    anchors_count: int = Field(ge=0)
+    summary_chars: int = Field(ge=0)
+    tokens_in: int = Field(ge=0)
+    tokens_out: int = Field(ge=0)
+    cost_usd: float = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+    cache_hit_kind: Literal["none", "exact", "semantic"] = "none"
+    last_resolved_tier: str | None = None
+
+
 class EstimationResponse(BaseModel):
     """Wraps the validated result, the prompt version that produced it, and
-    whether it came from a cache (exact or semantic)."""
+    whether it came from a cache (exact or semantic).
+
+    ``observation`` is populated only by the conversational endpoint
+    (``POST /sessions/{id}/estimate``). It carries the per-turn telemetry the
+    stress runner needs without contaminating the production contract — older
+    callers that ignore the field keep working.
+    """
 
     result: EstimationResult
     prompt_version: str
     cached: bool = False
+    observation: TurnObservation | None = None
 
 
 from app.schemas.acb import BossTrace  # noqa: E402

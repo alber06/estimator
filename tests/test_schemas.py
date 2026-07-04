@@ -88,9 +88,12 @@ def _valid_result(**overrides: object) -> dict[str, object]:
     return base
 
 
-def test_mismatched_total_cost_is_repaired_from_phase_sum() -> None:
-    repaired = EstimationResult(**_valid_result(total_cost_eur=31_000))
-    assert repaired.total_cost_eur == 30_000
+def test_phases_sum_must_equal_total_cost() -> None:
+    bad = _valid_result(total_cost_eur=31_000)  # phases still sum to 30_000
+    with pytest.raises(ValidationError) as exc_info:
+        EstimationResult(**bad)
+    msg = str(exc_info.value)
+    assert "phases sum" in msg and "total_cost_eur" in msg
 
 
 def test_low_confidence_requires_out_of_scope_prefix() -> None:
@@ -113,22 +116,16 @@ def test_high_confidence_accepts_any_summary_prefix() -> None:
     EstimationResult(**ok)
 
 
-def test_zero_duration_weeks_is_clamped_to_one() -> None:
-    repaired = EstimationResult(
-        **_valid_result(
-            phases=[
-                {
-                    "name": "Launch",
-                    "duration_weeks": 0,
-                    "cost_eur": 5_000,
-                    "summary": "Deploy to production and smoke-test.",
-                }
-            ],
-            total_cost_eur=5_000,
-            total_duration_weeks=1,
-        )
+def test_phase_bounds_are_enforced() -> None:
+    bad_phase = _valid_result(
+        phases=[
+            {"name": "x", "duration_weeks": 0, "cost_eur": 0, "summary": "too short"}
+        ],
+        total_cost_eur=0,
+        total_duration_weeks=1,
     )
-    assert repaired.phases[0].duration_weeks == 1
+    with pytest.raises(ValidationError):
+        EstimationResult(**bad_phase)
 
 
 def test_phase_directly_validates() -> None:

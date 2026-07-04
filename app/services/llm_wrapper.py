@@ -168,6 +168,16 @@ class LLMWrapper:
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         result = self._normalise_response(response, latency_ms=latency_ms)
+        log.info(
+            "llm_call_completed",
+            model=result["model"],
+            provider=result["provider"],
+            input_tokens=result["usage"]["input_tokens"],
+            output_tokens=result["usage"]["output_tokens"],
+            cost_usd=result["cost_usd"],
+            latency_ms=latency_ms,
+            finish_reason=result["finish_reason"],
+        )
         self.cache.set(cache_key, result)
         return {**result, "cache_hit": False}
 
@@ -204,7 +214,7 @@ class LLMWrapper:
         )
         t0 = time.perf_counter()
         try:
-            result, raw_response = self._instructor.chat.completions.create_with_completion(
+            result = self._instructor.chat.completions.create(
                 model=target_model,
                 api_key=api_key,
                 timeout=self.timeout,
@@ -224,13 +234,10 @@ class LLMWrapper:
             raise
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
-        normalised = self._normalise_response(raw_response, latency_ms=latency_ms)
         meta = {
-            "model": normalised["model"],
-            "provider": normalised["provider"],
+            "model": _normalise_model_name(target_model),
+            "provider": _provider_from_model(target_model),
             "latency_ms": latency_ms,
-            "usage": normalised["usage"],
-            "cost_usd": normalised["cost_usd"],
         }
         log.info(
             "llm_structured_chat_completed",

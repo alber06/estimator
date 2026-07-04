@@ -1,161 +1,101 @@
-"""Generate calibrated synthetic PDF attachments for stress evals.
+"""Generate calibrated synthetic PDFs for the stress runner.
 
-Targets are **extracted plain-text character counts** (what ``pypdf`` yields and
-``MAX_ATTACHMENT_CHARS`` truncates), not binary file size on disk.
+Produces ``attach_{5,20,50,100}kb.pdf`` under this directory, where the
+suffix refers to the *extracted text size* (what ``pypdf`` will pull out)
+rather than the file size on disk — the runner cares about the prompt
+budget, not the byte count.
 
-Calibration points::
+The generator is deterministic: same paragraph, same number of repeats per
+target. Re-running it yields byte-identical PDFs. The PDFs themselves are
+gitignored; only this script is committed.
 
-    0 KB   — no attachment (baseline; no file emitted)
-    5 KB   — ~5_000 chars, ~2 pages  → attach_5kb.pdf
-    20 KB  — ~20_000 chars, ~8 pages  → attach_20kb.pdf
-    50 KB  — ~50_000 chars, ~20 pages → attach_50kb.pdf
-    100 KB — ~60_000 chars (near cap) → attach_100kb.pdf
+Run with::
 
-Usage::
-
-    uv run python evals/stress/fixtures/build_pdfs.py
+    uv run python -m evals.stress.fixtures.build_pdfs
 """
 
 from __future__ import annotations
 
-import io
-from dataclasses import dataclass
+import sys
 from pathlib import Path
 
+from fpdf import FPDF
 from pypdf import PdfReader
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.platypus import Paragraph, SimpleDocTemplate
 
-MAX_ATTACHMENT_CHARS = 60_000
-OUTPUT_DIR = Path(__file__).resolve().parent / "pdfs"
 
-# ponytail: binary search on paragraph count; four fixtures keeps rebuild cost acceptable.
+_TARGETS_KB = (5, 20, 50, 100)
+
 _PARAGRAPH = (
-    "Functional requirement FR-{n}: The system shall validate user input on the server "
-    "before persisting records to PostgreSQL. Authentication uses OAuth2 with Google "
-    "Workspace SSO. Rate limiting applies at 100 requests per minute per organisation. "
-    "Audit logs retain entries for ninety days. Error responses follow RFC 7807. "
+    "The supplier portal must replace the existing manual workflow. Vendors "
+    "upload PDFs of compliance certificates which the procurement team reviews "
+    "for completeness, expiration, and conformance to the company's standard. "
+    "Approved suppliers are unlocked for purchase order generation; rejected "
+    "suppliers must remediate before the next review cycle. Every state "
+    "transition is recorded in an immutable audit log retained for seven years "
+    "in compliance with internal policy. Reviewers may attach comments to a "
+    "specific certificate; comments are visible to the supplier and form part "
+    "of the formal record. The portal must integrate with the legacy ERP for "
+    "vendor master data synchronisation, propagating changes within fifteen "
+    "minutes. Single sign-on is mandatory for internal users; vendors use "
+    "magic-link email authentication scoped to a single tenant. Performance "
+    "expectations are P95 page load under two seconds with two hundred "
+    "concurrent users, and the system must remain available under one hour of "
+    "downtime per quarter excluding planned maintenance windows scheduled "
+    "outside business hours. "
 )
 
 
-@dataclass(frozen=True)
-class PdfTarget:
-    label: str
-    filename: str | None
-    target_chars: int
-    approx_pages: int | None
+def _build_pdf(target_kb: int, output_path: Path) -> tuple[int, int]:
+    """Build a PDF whose *extracted text* is approximately ``target_kb`` KB.
+
+    Returns ``(text_chars, file_bytes)``. The text-vs-bytes ratio depends on
+    fpdf2's PDF compression — typical ratio is ~1.5x more bytes than text.
+    """
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+
+    target_chars = target_kb * 1024
+    text_chars = 0
+    while text_chars < target_chars:
+        pdf.multi_cell(0, 5, _PARAGRAPH)
+        text_chars += len(_PARAGRAPH)
+        if text_chars < target_chars:
+            # blank line as a soft delimiter, also helps pypdf parse paragraphs
+            pdf.ln(3)
+
+    pdf.output(str(output_path))
+    file_bytes = output_path.stat().st_size
+    return text_chars, file_bytes
 
 
-TARGETS: tuple[PdfTarget, ...] = (
-    PdfTarget("0 KB (baseline)", None, 0, None),
-    PdfTarget("5 KB", "attach_5kb.pdf", 5_000, 2),
-    PdfTarget("20 KB", "attach_20kb.pdf", 20_000, 8),
-    PdfTarget("50 KB", "attach_50kb.pdf", 50_000, 20),
-    PdfTarget("100 KB", "attach_100kb.pdf", MAX_ATTACHMENT_CHARS, None),
-)
+def _verify_extracted(path: Path) -> int:
+    """Read the PDF back through pypdf and return the extracted-text length.
 
-
-def _extract_text(content: bytes) -> tuple[str, int]:
-    reader = PdfReader(io.BytesIO(content))
+    The runner uses pypdf via ``app.attachments.extractor``; we want to make
+    sure what we generated is what the pipeline will see.
+    """
+    reader = PdfReader(str(path))
     parts: list[str] = []
     for page in reader.pages:
-        text = page.extract_text() or ""
-        if text.strip():
-            parts.append(text)
-    return "\n\n".join(parts), len(reader.pages)
+        parts.append(page.extract_text() or "")
+    return len("\n\n".join(parts))
 
 
-def _build_pdf(num_paragraphs: int) -> bytes:
-    styles = getSampleStyleSheet()
-    body = ParagraphStyle(
-        "Body",
-        parent=styles["Normal"],
-        fontSize=11,
-        leading=16,
-        spaceAfter=6,
-    )
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=letter,
-        leftMargin=72,
-        rightMargin=72,
-        topMargin=72,
-        bottomMargin=72,
-    )
-    story = [Paragraph(_PARAGRAPH.format(n=i), body) for i in range(1, num_paragraphs + 1)]
-    doc.build(story)
-    return buffer.getvalue()
-
-
-def _calibrate_paragraphs(target_chars: int, *, tolerance: int = 150) -> int:
-    if target_chars <= 0:
-        return 0
-
-    low, high = 1, max(4, (target_chars // 300) + 4)
-    while len(_extract_text(_build_pdf(high))[0]) < target_chars:
-        high *= 2
-
-    best = high
-    best_delta = abs(len(_extract_text(_build_pdf(high))[0]) - target_chars)
-    while low <= high:
-        mid = (low + high) // 2
-        chars = len(_extract_text(_build_pdf(mid))[0])
-        delta = abs(chars - target_chars)
-        if delta < best_delta:
-            best, best_delta = mid, delta
-        if chars < target_chars:
-            low = mid + 1
-        else:
-            high = mid - 1
-
-    while best_delta > tolerance:
-        candidate = best + (1 if len(_extract_text(_build_pdf(best))[0]) < target_chars else -1)
-        if candidate < 1:
-            break
-        chars = len(_extract_text(_build_pdf(candidate))[0])
-        delta = abs(chars - target_chars)
-        if delta >= best_delta:
-            break
-        best, best_delta = candidate, delta
-
-    return best
-
-
-def build_target(target: PdfTarget) -> bytes | None:
-    if target.filename is None:
-        return None
-    paragraphs = _calibrate_paragraphs(target.target_chars)
-    return _build_pdf(paragraphs)
-
-
-def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Writing PDFs to {OUTPUT_DIR}\n")
-    print(f"{'label':<22} {'file':<20} {'bytes':>8} {'chars':>8} {'pages':>6}")
-    print("-" * 68)
-
-    for target in TARGETS:
-        if target.filename is None:
-            print(f"{target.label:<22} {'(none)':<20} {'—':>8} {'—':>8} {'—':>6}")
-            continue
-
-        content = build_target(target)
-        assert content is not None
-        path = OUTPUT_DIR / target.filename
-        path.write_bytes(content)
-        text, pages = _extract_text(content)
+def main() -> int:
+    here = Path(__file__).parent
+    print(f"Writing PDFs to: {here}")
+    for kb in _TARGETS_KB:
+        path = here / f"attach_{kb}kb.pdf"
+        text_chars, file_bytes = _build_pdf(kb, path)
+        extracted_chars = _verify_extracted(path)
         print(
-            f"{target.label:<22} {target.filename:<20} "
-            f"{len(content):>8,} {len(text):>8,} {pages:>6}"
+            f"  {path.name}: text_chars={text_chars} "
+            f"file_bytes={file_bytes} pypdf_extracted={extracted_chars}"
         )
-
-    print(
-        f"\n100 KB fixture targets MAX_ATTACHMENT_CHARS={MAX_ATTACHMENT_CHARS:,} "
-        f"(extracted chars, not file size)."
-    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

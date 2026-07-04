@@ -42,6 +42,7 @@ from app.schemas.estimation import (
     EstimationResult,
     OutputFormat,
     ProjectType,
+    TurnObservation,
 )
 from app.services.boss import Boss
 from app.services.cache import EstimationCache
@@ -49,17 +50,10 @@ from app.services.critic import Critic
 from app.services.llm_wrapper import LLMWrapper
 from app.sessions.compression import apply_compression
 from app.sessions.metadata_extractor import update_metadata
-from app.sessions.models import Session, TurnObserved
+from app.sessions.models import Session
 from app.sessions.tier_resolver import Tier, resolve_tier
 
 log = structlog.get_logger()
-
-
-def _cache_hit_kind(meta: dict[str, Any]) -> str:
-    """Map wrapper meta to the turn_observed cache_hit_kind vocabulary."""
-    if meta.get("cache_hit"):
-        return "exact"
-    return "none"
 
 
 def _exact_cache_key(request: EstimationRequest, prompt_version: str, model: str) -> str:
@@ -259,6 +253,10 @@ class EstimationService:
         #    operation now — compression (anchor promotion + cumulative
         #    summary + sliding window) is the next, explicit step.
         session.history.append(user=user_message, assistant=result.model_dump_json())
+        # Capture turn_index BEFORE compression: post-compression the sliding
+        # window plateaus at ``max_turns`` and ``len(messages) // 2`` would
+        # stop reflecting how many turns the session has actually seen.
+        turn_index = len(session.history.messages) // 2
         apply_compression(
             session.history,
             llm_wrapper=self.llm_wrapper,
@@ -276,31 +274,33 @@ class EstimationService:
             model=self.metadata_extractor_model,
         )
 
-        turn_index = session.turn_number
-        session.turn_number += 1
-        usage = meta.get("usage") or {}
-        observed = TurnObserved(
-            turn_index=turn_index,
+        # 8. Emit the unified per-turn observation. Single structured event
+        #    (rather than five log lines) makes the stress runner trivial: it
+        #    reads ``response.observation`` straight from the JSON and never
+        #    has to reconcile timestamps. ``cache_hit_kind`` is "none"
+        #    because the conversational path bypasses both caches by design.
+        observation = TurnObservation(
+            turn_index=max(1, turn_index),
             session_id=session.session_id,
             enriched_transcript_chars=len(transcript),
             attachments_total_chars=attachments_total_chars,
             messages_in_window=len(session.history.messages),
             anchors_count=len(session.history.anchors),
             summary_chars=len(session.history.summary or ""),
-            tokens_in=int(usage.get("input_tokens", 0)),
-            tokens_out=int(usage.get("output_tokens", 0)),
-            cost_usd=float(meta.get("cost_usd", 0.0)),
-            latency_ms=int(meta.get("latency_ms", 0)),
-            cache_hit_kind=_cache_hit_kind(meta),
+            tokens_in=int(meta.get("tokens_in", 0) or 0),
+            tokens_out=int(meta.get("tokens_out", 0) or 0),
+            cost_usd=float(meta.get("cost_usd", 0.0) or 0.0),
+            latency_ms=int(meta.get("latency_ms", 0) or 0),
+            cache_hit_kind="none",
             last_resolved_tier=session.last_resolved_tier,
         )
-        session.last_turn_observed = observed
-        log.info("turn_observed", **observed.model_dump())
+        log.info("turn_observed", **observation.model_dump())
 
         return EstimationResponse(
             result=result,
             prompt_version=self.conversational_prompt_version,
             cached=False,
+            observation=observation,
         )
 
     def estimate_with_acb(

@@ -59,6 +59,7 @@ class EstimationCache:
             log.warning("cache_get_failed", error=str(exc))
             return None
         if cached:
+            log.info("cache_hit", key_prefix=key[:24])
             return json.loads(cached)
         log.info("cache_miss", key_prefix=key[:24])
         return None

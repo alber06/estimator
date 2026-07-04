@@ -41,7 +41,7 @@ from app.schemas.estimation import (
     ProjectType,
 )
 from app.services.estimation import EstimationService
-from app.sessions.models import Message, ProjectMetadata, TurnObserved
+from app.sessions.models import ProjectMetadata, Session
 from app.sessions.store import SessionNotFoundError, SessionStore
 from app.sessions.tier_resolver import Tier
 
@@ -63,21 +63,6 @@ class SessionInfoResponse(BaseModel):
     summary_chars: int = 0
     last_resolved_tier: str | None = None
     last_tier_rule: str | None = None
-    turn_number: int = Field(
-        description="1-based index of the next turn to process.",
-    )
-    summary: str | None = Field(
-        default=None,
-        description="Cumulative summary of folded-away turns (for memory-drift evals).",
-    )
-    anchors: list[Message] = Field(
-        default_factory=list,
-        description="Durable anchor messages kept outside the sliding window.",
-    )
-    last_turn: TurnObserved | None = Field(
-        default=None,
-        description="Telemetry from the most recently completed turn.",
-    )
 
 
 @router.post("", response_model=CreateSessionResponse, status_code=201)
@@ -107,10 +92,6 @@ def get_session(
         summary_chars=len(session.history.summary or ""),
         last_resolved_tier=session.last_resolved_tier,
         last_tier_rule=session.last_tier_rule,
-        turn_number=session.turn_number,
-        summary=session.history.summary,
-        anchors=list(session.history.anchors),
-        last_turn=session.last_turn_observed,
     )
 
 
@@ -119,11 +100,16 @@ async def _resolve_session_and_enrich(
     transcript: str,
     attachments: list[UploadFile],
     store: SessionStore,
-):
+) -> tuple[Session, str, int]:
     """Shared prelude for both /estimate and /estimate-acb.
 
-    Returns ``(session, enriched_transcript)``. Raises ``HTTPException`` for
-    session/attachment problems; the caller wraps the LLM call separately.
+    Returns ``(session, enriched_transcript, attachments_total_chars)``. The
+    third element is the sum of raw extracted text across all attachments
+    (excluding the ``--- attachment: ... ---`` fences added by
+    ``enrich_transcript``); the stress runner uses it to feed the
+    ``attachments_total_chars`` field of ``TurnObservation`` without having
+    to re-do the math. Raises ``HTTPException`` for session/attachment
+    problems; the caller wraps the LLM call separately.
     """
     try:
         session = store.get_or_404(session_id)
@@ -161,6 +147,14 @@ async def _resolve_session_and_enrich(
 
     enriched = enrich_transcript(transcript=transcript, attachments=extracted)
     attachments_total_chars = sum(len(text) for _, text in extracted)
+    log.info(
+        "session_estimate_received",
+        session_id=session_id,
+        transcript_chars=len(transcript),
+        enriched_transcript_chars=len(enriched),
+        attachment_count=len(extracted),
+        attachments_total_chars=attachments_total_chars,
+    )
     return session, enriched, attachments_total_chars
 
 
