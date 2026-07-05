@@ -128,7 +128,10 @@ class MemoryDriftMetric:
                 ),
             )
 
-        needle = self.fact.lower()
+        # fact_to_remember is authored as "label: value" for readability
+        # (e.g. "project name: Nimbus"); only the value is expected to
+        # literally surface in summary/anchors/metadata text.
+        needle = self.fact.split(":", 1)[-1].strip().lower()
         haystacks: dict[str, str] = {}
         if "summary" in self.where:
             haystacks["summary"] = str(_field(session_snapshot, "summary") or "")

@@ -46,6 +46,13 @@ def test_estimate_cost_uses_pricing_table() -> None:
     assert cost == pytest.approx(0.75)
 
 
+def test_estimate_cost_matches_dated_snapshot_id() -> None:
+    # OpenAI returns a dated snapshot (e.g. "gpt-4o-mini-2024-07-18"), not the
+    # bare alias we requested — cost lookup must still match it.
+    cost = _estimate_cost("gpt-4o-mini-2024-07-18", 1_000_000, 1_000_000)
+    assert cost == pytest.approx(0.75)
+
+
 def test_complete_returns_normalised_dict_and_caches(wrapper: LLMWrapper) -> None:
     fake = _fake_completion(model="gpt-4o-mini", content="hello world")
     with patch.object(wrapper.router, "completion", return_value=fake) as mocked:
