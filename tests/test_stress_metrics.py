@@ -37,3 +37,19 @@ def test_memory_drift_finds_fact_in_summary_case_insensitive() -> None:
     result = metric.evaluate(snapshot)
     assert result.passed
     assert "summary" in result.details
+
+
+def test_memory_drift_matches_bare_value_in_metadata() -> None:
+    # fact_to_remember is authored as "label: value" for eval readability, but
+    # real ProjectMetadata never carries the label — only "Nimbus" itself.
+    metric = MemoryDriftMetric(fact="project name: Nimbus")
+    snapshot = {
+        "turn_number": 5,
+        "fact_turn": 1,
+        "summary": "",
+        "anchors": [],
+        "metadata": ProjectMetadata(project_name="Nimbus"),
+    }
+    result = metric.evaluate(snapshot)
+    assert result.passed
+    assert "metadata" in result.details

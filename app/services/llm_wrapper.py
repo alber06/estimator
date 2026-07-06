@@ -44,7 +44,15 @@ T = TypeVar("T", bound=BaseModel)
 
 def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     base = _normalise_model_name(model)
-    costs = MODEL_COSTS.get(base) or MODEL_COSTS.get(model) or {"input": 0.0, "output": 0.0}
+    costs = MODEL_COSTS.get(base) or MODEL_COSTS.get(model)
+    if costs is None:
+        # Providers (OpenAI) return a dated snapshot id (e.g. "gpt-4o-mini-2024-07-18")
+        # instead of the bare alias we requested. Match the longest known prefix.
+        for key in sorted(MODEL_COSTS, key=len, reverse=True):
+            if base.startswith(key):
+                costs = MODEL_COSTS[key]
+                break
+    costs = costs or {"input": 0.0, "output": 0.0}
     return round((tokens_in * costs["input"] + tokens_out * costs["output"]) / 1_000_000, 6)
 
 
