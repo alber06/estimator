@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import structlog.testing
 
 from app.guardrails.input import InputGuardrailViolation, check_input
 
@@ -44,6 +45,21 @@ def test_moderation_network_failure_fails_open() -> None:
 
     # Should not raise; the clean text still passes the other two layers.
     check_input(CLEAN_DESCRIPTION, openai_client=Boom())
+
+
+def test_moderation_network_failure_logs_error_event() -> None:
+    class Boom:
+        class moderations:
+            @staticmethod
+            def create(input: str):
+                raise RuntimeError("network down")
+
+    with structlog.testing.capture_logs() as captured:
+        check_input(CLEAN_DESCRIPTION, openai_client=Boom())
+
+    moderation_failures = [e for e in captured if e["event"] == "moderation_call_failed_failing_open"]
+    assert len(moderation_failures) == 1
+    assert moderation_failures[0]["log_level"] == "error"
 
 
 @pytest.mark.parametrize(
