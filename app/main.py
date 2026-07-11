@@ -5,8 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import estimations, ingestion, sessions
-from app.embedding_pipeline.router import router as embedding_pipeline_router
+from app.api.embeddings import router as embeddings_router
+from app.api import config as config_api
+from app.api import estimations, ingestion, sessions
+
 
 def configure_logging() -> None:
     """Set up structlog: JSON in production, human-readable in development."""
@@ -44,6 +46,7 @@ async def lifespan(app: FastAPI):
     # deploy-time problem, not a request-time one.
     try:
         from app.dependencies import get_catalog
+
         catalog = get_catalog()
         log.info(
             "catalog_loaded",
@@ -78,7 +81,8 @@ app.add_middleware(
 app.include_router(estimations.router)
 app.include_router(sessions.router)
 app.include_router(ingestion.router)
-app.include_router(embedding_pipeline_router)
+app.include_router(embeddings_router)
+app.include_router(config_api.router)
 
 
 @app.get("/health")

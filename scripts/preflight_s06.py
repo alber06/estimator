@@ -11,6 +11,7 @@ Usage::
     # or, inside docker:
     docker compose exec estimator python scripts/preflight_s06.py
 """
+
 from __future__ import annotations
 
 import importlib.metadata as importlib_metadata
@@ -89,9 +90,7 @@ def check_packages() -> str:
         if _parse_version(installed) < _parse_version(minimum):
             too_old.append(f"{pkg} {installed} < {minimum}")
     if missing or too_old:
-        raise RuntimeError(
-            "missing=" + ",".join(missing) + " too_old=" + ",".join(too_old)
-        )
+        raise RuntimeError("missing=" + ",".join(missing) + " too_old=" + ",".join(too_old))
     return f"{len(_MIN_VERSIONS)} packages OK"
 
 
@@ -142,16 +141,14 @@ def check_health_endpoint() -> str:
         with urllib.request.urlopen("http://localhost:8000/health", timeout=2) as r:
             return f"{r.status} OK"
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(
-            f"GET /health failed — is the estimator running? ({exc})"
-        ) from exc
+        raise RuntimeError(f"GET /health failed — is the estimator running? ({exc})") from exc
 
 
 def check_postgres() -> str:
     """Connect to Postgres and confirm the migration has been applied."""
     from sqlalchemy import inspect
 
-    from app.persistence.database import create_engine_from_settings
+    from app.foundation.persistence.database import create_engine_from_settings
 
     engine = create_engine_from_settings()
     insp = inspect(engine)
@@ -159,9 +156,7 @@ def check_postgres() -> str:
     expected = {"pseudonym_mappings", "ingestion_jobs", "alembic_version"}
     missing = expected - tables
     if missing:
-        raise RuntimeError(
-            f"missing tables: {missing}; run `alembic upgrade head`"
-        )
+        raise RuntimeError(f"missing tables: {missing}; run `alembic upgrade head`")
     return f"tables OK: {sorted(expected)}"
 
 

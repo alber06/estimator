@@ -4,19 +4,36 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+import anthropic
 import redis
 import structlog
+from fastapi import Depends, HTTPException
 from openai import OpenAI
 
-from app.cache.semantic import EstimationSemanticCache
+from app.generation.cag.semantic import EstimationSemanticCache
 from app.config import get_settings
+from app.generation.rag.chunking.base import Chunker
+from app.generation.rag.chunking.structural import JSONStructuralChunker
+from app.generation.rag.embedding.embedder import OpenAIEmbedder
+from app.generation.rag.ingestion_service import EmbeddingIngestionService
+from app.generation.rag.retriever import SemanticRetriever
+from app.generation.rag.chunking.strategies import (
+    ContextualRetrievalChunker,
+    FixedSizeChunker,
+    HierarchicalChunker,
+    PropositionalChunker,
+    RecursiveChunker,
+    SemanticChunker,
+    SentenceWindowChunker,
+)
 from app.ingestion.catalog import DataCatalog, load_catalog
 from app.ingestion.loaders.filesystem import FileSystemLoader
 from app.ingestion.parsers.registry import ParserRegistry, default_registry
-from app.services.cache import EstimationCache
-from app.services.estimation import EstimationService
-from app.services.llm_wrapper import LLMWrapper
-from app.sessions.store import SessionStore
+from app.generation.cag.exact import EstimationCache
+from app.domain.estimation_service import EstimationService
+from app.foundation.llm.runtime_config import RuntimeModelConfig
+from app.foundation.llm.wrapper import LLMWrapper
+from app.generation.conversation.store import SessionStore
 
 log = structlog.get_logger()
 
@@ -25,6 +42,17 @@ log = structlog.get_logger()
 def get_cache() -> EstimationCache:
     settings = get_settings()
     return EstimationCache.from_url(settings.REDIS_URL, ttl=settings.CACHE_TTL)
+
+
+@lru_cache
+def get_runtime_config() -> RuntimeModelConfig:
+    """Redis-backed override store for the LLM model knobs (Settings UI).
+
+    The singleton is just the Redis handle — freshness comes from reading
+    Redis inside on every call, not from rebuilding this object.
+    """
+    settings = get_settings()
+    return RuntimeModelConfig.from_url(settings.REDIS_URL, settings)
 
 
 @lru_cache
@@ -38,6 +66,7 @@ def get_llm_wrapper() -> LLMWrapper:
         timeout=settings.LLM_TIMEOUT,
         num_retries=settings.LLM_RETRIES,
         cache=get_cache(),
+        runtime_config=get_runtime_config(),
     )
 
 
@@ -49,6 +78,135 @@ def get_openai_client() -> OpenAI | None:
     if not settings.OPENAI_API_KEY:
         return None
     return OpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+@lru_cache
+def get_chunker() -> JSONStructuralChunker:
+    """Stateless structural chunker for the embedding pipeline (Session 7)."""
+    return JSONStructuralChunker()
+
+
+@lru_cache
+def get_embedder() -> OpenAIEmbedder | None:
+    """OpenAI embedder for the embedding pipeline. ``None`` when no API key is
+    configured (mirrors ``get_semantic_cache``); the router maps that to a 500."""
+    settings = get_settings()
+    client = get_openai_client()
+    if client is None:
+        log.warning("embedder_disabled", reason="no_openai_key")
+        return None
+    return OpenAIEmbedder(client=client, model=settings.EMBEDDING_MODEL)
+
+
+def get_embedding_ingestion_service(
+    chunker: JSONStructuralChunker = Depends(get_chunker),
+    embedder: OpenAIEmbedder | None = Depends(get_embedder),
+) -> EmbeddingIngestionService:
+    """Build the ingest service or raise when the embedder is unavailable."""
+    if embedder is None:
+        log.error("embeddings_ingest_failed", reason="embedder_unavailable")
+        raise HTTPException(status_code=500, detail="Embedding service is not available.")
+    return EmbeddingIngestionService(chunker=chunker, embedder=embedder)
+
+
+def get_semantic_retriever(
+    embedder: OpenAIEmbedder | None = Depends(get_embedder),
+) -> SemanticRetriever:
+    """Build the vector retriever or raise when the embedder is unavailable."""
+    if embedder is None:
+        log.error("embeddings_search_failed", reason="embedder_unavailable")
+        raise HTTPException(status_code=500, detail="Embedding service is not available.")
+    return SemanticRetriever(embedder=embedder)
+
+
+@lru_cache
+def get_anthropic_client() -> anthropic.Anthropic | None:
+    """Lazy Anthropic client. ``None`` when no API key is configured."""
+    settings = get_settings()
+    if not settings.ANTHROPIC_API_KEY:
+        return None
+    return anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+
+# --- Session 7 live: one factory per chunking strategy (§7) ----------------
+# The no-API strategies are plain singletons. The LLM-backed ones raise a clear
+# error if their key is missing; the comparison endpoint maps that to a 500.
+
+
+@lru_cache
+def get_fixed_size_chunker() -> FixedSizeChunker:
+    return FixedSizeChunker()
+
+
+@lru_cache
+def get_recursive_chunker() -> RecursiveChunker:
+    return RecursiveChunker()
+
+
+@lru_cache
+def get_sentence_window_chunker() -> SentenceWindowChunker:
+    return SentenceWindowChunker()
+
+
+@lru_cache
+def get_hierarchical_chunker() -> HierarchicalChunker:
+    return HierarchicalChunker()
+
+
+@lru_cache
+def get_semantic_chunker() -> SemanticChunker:
+    settings = get_settings()
+    # SemanticChunker raises a clear error if the OpenAI key is missing.
+    return SemanticChunker(api_key=settings.OPENAI_API_KEY, model=settings.EMBEDDING_MODEL)
+
+
+# NOT @lru_cache: these chunkers are rebuilt per /embeddings/compare request
+# (construction is cheap — the underlying API clients stay singletons) so a
+# runtime model override takes effect on the next comparison.
+def get_propositional_chunker() -> PropositionalChunker:
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("PropositionalChunker requires OPENAI_API_KEY.")
+    model = get_runtime_config().effective("PROPOSITIONAL_CHUNKER_MODEL")
+    return PropositionalChunker(client=client, model=model)
+
+
+def get_contextual_retrieval_chunker() -> ContextualRetrievalChunker:
+    client = get_anthropic_client()
+    if client is None:
+        raise RuntimeError("ContextualRetrievalChunker requires ANTHROPIC_API_KEY.")
+    model = get_runtime_config().effective("CONTEXTUAL_CHUNKER_MODEL")
+    return ContextualRetrievalChunker(client=client, model=model)
+
+
+# Registry: strategy name → factory. ``structural`` reuses ``get_chunker``.
+# Order is the canonical comparison order used by "all".
+CHUNKER_FACTORIES = {
+    "structural": get_chunker,
+    "fixed_size": get_fixed_size_chunker,
+    "recursive": get_recursive_chunker,
+    "sentence_window": get_sentence_window_chunker,
+    "semantic": get_semantic_chunker,
+    "propositional": get_propositional_chunker,
+    "contextual_retrieval": get_contextual_retrieval_chunker,
+    "hierarchical": get_hierarchical_chunker,
+}
+ALL_STRATEGIES = list(CHUNKER_FACTORIES)
+
+
+def build_chunkers(names: list[str]) -> list[Chunker]:
+    """Instantiate the requested chunkers by name.
+
+    Raises ``KeyError`` for an unknown strategy and ``RuntimeError`` for a
+    strategy whose API key is missing (both mapped to HTTP errors by the router).
+    """
+    chunkers: list[Chunker] = []
+    for name in names:
+        factory = CHUNKER_FACTORIES.get(name)
+        if factory is None:
+            raise KeyError(name)
+        chunkers.append(factory())
+    return chunkers
 
 
 @lru_cache
@@ -102,6 +260,7 @@ def get_estimation_service() -> EstimationService:
         conversational_prompt_version=settings.CONVERSATIONAL_PROMPT_VERSION,
         critic_model=settings.CRITIC_MODEL,
         boss_max_iterations=settings.BOSS_MAX_ITERATIONS,
+        runtime_config=get_runtime_config(),
     )
 
 

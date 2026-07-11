@@ -16,7 +16,7 @@ services:
     # meant for running uvicorn outside Docker.
     environment:
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql+psycopg://estimator:estimator@estimator-postgres:5432/estimator
+      DATABASE_URL: postgresql+asyncpg://estimator:estimator@estimator-postgres:5432/estimator
 
     depends_on:
       redis:
@@ -30,9 +30,11 @@ services:
     # under alembic/versions/, both expected to survive a container restart.
     volumes:
       - ./app:/app/app
-      - ./scripts:/app/scripts
       - ./tests:/app/tests
       - ./data:/app/data
+      - ./scripts:/app/scripts
+      - ./query_examples.py:/app/query_examples.py
+      - ./output_examples.txt:/app/output_examples.txt
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
 
@@ -95,7 +97,7 @@ services:
       test: ["CMD", "pg_isready", "-U", "estimator", "-d", "estimator"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
 volumes:

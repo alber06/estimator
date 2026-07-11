@@ -1,0 +1,74 @@
+================================================================================
+[1/5] Componente directo conocido (direct)
+Query: REST API development with JWT authentication for financial sector
+--------------------------------------------------------------------------------
+================================================================================
+[1/5] Componente directo conocido (direct)
+Query: REST API development with JWT authentication for financial sector
+--------------------------------------------------------------------------------
+search_time_ms: 323
+  #1  chunk_id=1      distance=0.4110  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #2  chunk_id=2      distance=0.4760  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #3  chunk_id=3      distance=0.4980  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #4  chunk_id=4      distance=0.5120  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+
+================================================================================
+[2/5] Reformulación semántica (reformulation)
+Query: secure backend service with token-based access control for banking applications
+--------------------------------------------------------------------------------
+search_time_ms: 171
+  #1  chunk_id=1      distance=0.4070  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #2  chunk_id=2      distance=0.4560  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #3  chunk_id=3      distance=0.4770  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #4  chunk_id=4      distance=0.5350  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+
+================================================================================
+[3/5] Dominio distinto (out_of_domain)
+Query: mobile application for restaurant reservations
+--------------------------------------------------------------------------------
+search_time_ms: 930
+  #1  chunk_id=4      distance=0.6510  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #2  chunk_id=1      distance=0.6690  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #3  chunk_id=3      distance=0.6720  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #4  chunk_id=2      distance=0.6950  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+
+================================================================================
+[4/5] Consulta ambigua (ambiguous)
+Query: integration with external system
+--------------------------------------------------------------------------------
+search_time_ms: 166
+  #1  chunk_id=2      distance=0.6620  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #2  chunk_id=4      distance=0.6860  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #3  chunk_id=3      distance=0.6900  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #4  chunk_id=1      distance=0.6980  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+
+================================================================================
+[5/5] Consulta muy específica (specific)
+Query: migration from monolith to microservices architecture using Kubernetes
+--------------------------------------------------------------------------------
+search_time_ms: 170
+  #1  chunk_id=1      distance=0.7030  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #2  chunk_id=2      distance=0.7100  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #3  chunk_id=3      distance=0.7130  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+  #4  chunk_id=4      distance=0.7240  chunk_type=structural
+      [Project: Mobile banking API with OAuth 2.0 authentication and PSD2 compliance] [Client sector: finance | Year: 2024 | …
+

@@ -14,6 +14,7 @@ Three guarantees:
 3. The function is *synchronous*. It is invoked from a FastAPI BackgroundTask;
    the HTTP layer wraps it in a session-scoped DB session.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -29,7 +30,7 @@ from app.ingestion.documents.models import Document
 from app.ingestion.loaders.filesystem import FileSystemLoader
 from app.ingestion.parsers.protocol import ParseContext
 from app.ingestion.parsers.registry import ParserRegistry
-from app.persistence.repositories.jobs import JobsRepository
+from app.foundation.persistence.repositories.jobs import JobsRepository
 
 log = structlog.get_logger(__name__)
 

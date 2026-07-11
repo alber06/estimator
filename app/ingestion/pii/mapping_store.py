@@ -15,13 +15,14 @@ Both stores are *idempotent*: looking up the same ``(entity_type, hash)``
 twice returns the same pseudonym, regardless of the order of calls. Concurrent
 callers converge thanks to the unique constraint upstream.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
 
-from app.persistence.repositories.mappings import MappingsRepository
+from app.foundation.persistence.repositories.mappings import MappingsRepository
 
 
 @runtime_checkable

@@ -4,8 +4,8 @@ from unittest.mock import patch
 import fakeredis
 import pytest
 
-from app.services.cache import EstimationCache
-from app.services.llm_wrapper import LLMWrapper, _estimate_cost
+from app.generation.cag.exact import EstimationCache
+from app.foundation.llm.wrapper import LLMWrapper, _estimate_cost
 
 
 def _fake_completion(model: str, content: str = "the answer", input_tokens: int = 100, output_tokens: int = 50):
@@ -82,7 +82,7 @@ def test_complete_returns_normalised_dict_and_caches(wrapper: LLMWrapper) -> Non
 
 def test_complete_with_model_override_bypasses_router(wrapper: LLMWrapper) -> None:
     fake = _fake_completion(model="gpt-4o", content="overridden")
-    with patch("app.services.llm_wrapper.litellm.completion", return_value=fake) as direct, \
+    with patch("app.foundation.llm.wrapper.litellm.completion", return_value=fake) as direct, \
         patch.object(wrapper.router, "completion") as router_call:
         result = wrapper.complete(
             system_prompt="sys",
@@ -113,7 +113,7 @@ def test_thinking_budget_passed_for_anthropic_fallback(wrapper: LLMWrapper) -> N
 
 def test_thinking_budget_pads_max_tokens_when_anthropic_override(wrapper: LLMWrapper) -> None:
     fake = _fake_completion(model="claude-haiku-4-5-20251001", content="ok")
-    with patch("app.services.llm_wrapper.litellm.completion", return_value=fake) as direct:
+    with patch("app.foundation.llm.wrapper.litellm.completion", return_value=fake) as direct:
         wrapper.complete(
             system_prompt="sys",
             user_message="usr",
@@ -183,3 +183,62 @@ def test_complete_structured_chat_uses_anthropic_key_for_claude(wrapper: LLMWrap
 # were deleted. Structured output via Instructor (complete_structured) replaces
 # token streaming; tests for that path live in test_estimate_endpoint.py with a
 # mocked EstimationService.
+
+
+# --- Runtime model overrides (Settings UI) ----------------------------------
+
+
+def _wrapper_with_runtime(primary_override: str | None) -> LLMWrapper:
+    """Wrapper wired to a runtime config store with an optional primary override."""
+    import fakeredis as _fakeredis
+
+    from app.config import Settings
+    from app.foundation.llm.runtime_config import RuntimeModelConfig
+
+    settings = Settings(OPENAI_API_KEY="fake-openai", _env_file=None)
+    runtime = RuntimeModelConfig(_fakeredis.FakeRedis(decode_responses=True), settings)
+    if primary_override:
+        runtime.set("PRIMARY_MODEL", primary_override)
+
+    cache = EstimationCache(fakeredis.FakeRedis(decode_responses=True), ttl=60)
+    return LLMWrapper(
+        openai_api_key="fake-openai",
+        anthropic_api_key="fake-anthropic",
+        primary_model=settings.PRIMARY_MODEL,
+        fallback_model=settings.FALLBACK_MODEL,
+        timeout=30,
+        num_retries=2,
+        cache=cache,
+        runtime_config=runtime,
+    )
+
+
+def test_primary_model_property_reflects_runtime_override() -> None:
+    wrapper = _wrapper_with_runtime("gpt-4o")
+    assert wrapper.primary_model == "gpt-4o"
+    # Clearing the override falls back to the settings default.
+    wrapper._runtime_config.set("PRIMARY_MODEL", None)
+    assert wrapper.primary_model == "gpt-4o-mini"
+
+
+def test_complete_uses_router_when_no_runtime_override() -> None:
+    wrapper = _wrapper_with_runtime(None)
+    fake = _fake_completion(model="gpt-4o-mini", content="router path")
+    with patch.object(wrapper.router, "completion", return_value=fake) as router_call:
+        result = wrapper.complete(system_prompt="sys", user_message="usr")
+    assert router_call.call_count == 1
+    assert result["model"] == "gpt-4o-mini"
+
+
+def test_complete_takes_direct_path_when_runtime_override_active() -> None:
+    # An active primary override behaves like model_override: direct call,
+    # Router untouched (its deployments are frozen at construction).
+    wrapper = _wrapper_with_runtime("gpt-4o")
+    fake = _fake_completion(model="gpt-4o", content="runtime override")
+    with patch("app.foundation.llm.wrapper.litellm.completion", return_value=fake) as direct, \
+        patch.object(wrapper.router, "completion") as router_call:
+        result = wrapper.complete(system_prompt="sys", user_message="usr")
+    assert direct.call_count == 1
+    assert router_call.call_count == 0
+    assert direct.call_args.kwargs["model"] == "gpt-4o"
+    assert result["model"] == "gpt-4o"

@@ -5,7 +5,7 @@ Servicio IA en FastAPI que estima proyectos de software a partir de un formulari
 A partir de la **Sesión 04** el contrato es deliberadamente estrecho:
 - entrada tipada (`description` + tres enums),
 - salida en texto libre,
-- prompt fuera del código en templates Jinja2 versionados (`app/prompts/<use_case>/<version>/`).
+- prompt fuera del código en templates Jinja2 versionados (`app/foundation/prompts/<use_case>/<version>/`).
 
 La inteligencia adicional (output estructurado, guardrails, cache semántico) se construye encima de esta base en directo.
 
@@ -63,37 +63,6 @@ uv run streamlit run streamlit_app.py
 
 La URL del servicio se lee de `ESTIMATOR_API_BASE_URL` (default `http://localhost:8000`).
 
-## Comparar similitud coseno entre textos
-
-`scripts/compare.py` embedea dos textos con `OpenAIEmbedder` y calcula la similitud coseno (producto escalar / producto de normas, sin numpy).
-
-Fuera del contenedor (carga `.env` vía `get_settings()`):
-
-```bash
-cd estimator
-uv run python scripts/compare.py \
-  --text-a "OAuth 2.0 authentication backend for fintech" \
-  --text-b "JWT-based authorization service for banking app"
-```
-
-Dentro del contenedor (con `docker compose up` en marcha):
-
-```bash
-docker compose exec estimator python scripts/compare.py \
-  --text-a "OAuth 2.0 authentication backend for fintech" \
-  --text-b "JWT-based authorization service for banking app"
-```
-
-Salida de ejemplo:
-
-```
-Text A: OAuth 2.0 authentication backend for fintech
-Text B: JWT-based authorization service for banking app
-Cosine similarity: 0.8421
-```
-
-Requiere `OPENAI_API_KEY` en `.env` (o en el `env_file` del servicio `estimator`).
-
 ## Cómo testar
 
 ```bash
@@ -144,7 +113,7 @@ estimator/
 
 ### Versionado de prompts
 
-La estructura `app/prompts/<use_case>/<version>/` no es opcional: `v1/` ya existe desde el primer día porque versionar un prompt es la forma más barata de habilitar A/B testing y rollback en producción. Cuando una iteración del prompt se cocina, se crea `v2/` al lado y `render_estimation_prompt(request, version="v2")` lo recoge sin tocar router ni schemas.
+La estructura `app/foundation/prompts/<use_case>/<version>/` no es opcional: `v1/` ya existe desde el primer día porque versionar un prompt es la forma más barata de habilitar A/B testing y rollback en producción. Cuando una iteración del prompt se cocina, se crea `v2/` al lado y `render_estimation_prompt(request, version="v2")` lo recoge sin tocar router ni schemas.
 
 Lo que vive **fuera** del template (en código): el contrato (`EstimationRequest`), el switch de versión y el wrapper. Todo lo demás (rol del modelo, reglas, ejemplos, formatos de salida, niveles de detalle) vive dentro del `.j2`. Si para cambiar el comportamiento del modelo hay que tocar Python, la separación está rota.
 
@@ -161,7 +130,35 @@ Lo que vive **fuera** del template (en código): el contrato (`EstimationRequest
 | `APP_ENV` | `development` | Controla el renderer de structlog |
 | `ESTIMATOR_API_BASE_URL` | `http://localhost:8000` | Lo lee el cliente Streamlit |
 
-`get_settings()` es un singleton cacheado con `lru_cache`: cualquier cambio en `.env` requiere reiniciar uvicorn (no basta con `--reload`).
+`get_settings()` es un singleton cacheado con `lru_cache`: cualquier cambio en `.env` requiere reiniciar uvicorn (no basta con `--reload`). **Excepción: los modelos LLM** — ver la sección siguiente.
+
+## Configuración de modelos en runtime
+
+Los knobs de modelo (`PRIMARY_MODEL`, `FALLBACK_MODEL`, `CRITIC_MODEL`, `METADATA_EXTRACTOR_MODEL`, `COMPRESSION_MODEL`, `PROPOSITIONAL_CHUNKER_MODEL`, `CONTEXTUAL_CHUNKER_MODEL`) se pueden **sobreescribir en caliente** sin tocar `.env` ni recrear contenedores — pensado para cambiar de modelo en mitad de un directo (la pestaña *Ajustes* del cliente Rails usa este endpoint).
+
+```
+GET /api/v1/config/models
+  → {"models": {KEY: {"effective", "default", "overridden"}},
+     "available_models": [...], "embedding_model": "..."}
+
+PUT /api/v1/config/models
+  Body: {"models": {"PRIMARY_MODEL": "gpt-4o", "CRITIC_MODEL": null}}   # null = reset
+  → mismo shape que el GET (snapshot fresco)
+  422 key desconocida / modelo fuera de catálogo · 400 modelo sin API key · 503 Redis caído
+```
+
+Cómo funciona (`app/foundation/llm/runtime_config.py`):
+
+- Los overrides viven en un hash de Redis (`estimator:runtime_config`): **sobreviven a `--reload` y reinicios**, y todos los workers los ven al instante. `.env` sigue siendo la capa de defaults.
+- El wrapper y el servicio resuelven el modelo **por llamada** (properties), así que el cambio aplica en la siguiente petición. El catálogo (`AVAILABLE_MODELS`) se filtra por las API keys configuradas.
+- Con un override de primario activo no hay fallback automático de provider (misma semántica que `model_override`: llamada directa, sin Router).
+- Las caches se particionan por modelo (la exacta ya lo hacía; la semántica incluye el modelo en su bucket desde este cambio), así que cambiar de modelo nunca sirve respuestas generadas por otro.
+- `EMBEDDING_MODEL` queda fuera a propósito: cambiarlo invalidaría todos los vectores almacenados.
+
+```bash
+http PUT :8000/api/v1/config/models models:='{"PRIMARY_MODEL": "gpt-4o"}'
+http PUT :8000/api/v1/config/models models:='{"PRIMARY_MODEL": null}'     # volver al .env
+```
 
 ---
 
@@ -234,6 +231,124 @@ Los tres tests son de integración con `TestClient`, un `FakeLLMWrapper` que cap
 ### Cliente Rails
 
 El cliente Rails (`estimator-web/`) se adaptó al flujo conversacional con un nuevo controller `ChatSessionsController` (rutas `/chat_sessions`, root re-apuntado aquí), un panel lateral con el `ProjectMetadata` actual, multipart vía `faraday-multipart` y un botón "Nueva conversación" que destruye el mirror local y arranca una sesión limpia. El endpoint transaccional `EstimationsController` se mantiene operativo para la demo histórica.
+
+## Sesión 7 — Pipeline de embeddings
+
+Primer paso hacia la búsqueda semántica: convertir presupuestos históricos (JSON) en vectores. El módulo vive en `app/generation/rag/` y expone ingest, search y compare. La persistencia en pgvector (`documents` + `chunks`) ya está operativa; el índice vectorial aproximado (HNSW) se deja para cuando el corpus lo justifique (ver sección siguiente).
+
+Piezas:
+
+- `chunker.py` (`JSONStructuralChunker`) — chunking **estructural**: un componente del presupuesto = un chunk. A cada chunk se le antepone una cabecera de contexto del presupuesto padre (proyecto, sector, tecnología) para que no pierda la pista de a quién pertenece. Cuenta tokens con `tiktoken`.
+- `embedder.py` (`OpenAIEmbedder`) — invoca `text-embedding-3-small` (1536 dims) en **batches** de 100, con reintento exponencial (1s/2s/4s) ante `RateLimitError` y logging por batch.
+- `router.py` — orquesta `chunk → embed → stats`.
+
+### Endpoint nuevo
+
+```
+POST /embeddings/ingest
+  Input  (IngestRequest):  {"budgets": [ <Budget>, ... ]}
+  Output (IngestResponse): {"chunks": [ <EmbeddedChunk>, ... ], "stats": {...}}
+  200 OK · 422 validación Pydantic · 500 error de la API de embeddings (mensaje genérico, detalle en logs)
+```
+
+Aparece en Swagger (`http://localhost:8000/docs`) y se puede invocar desde ahí con el sample de datos.
+
+Desde línea de comandos, alimentando los 15 presupuestos de ejemplo (`data/budgets_sample.json` es un array; el endpoint espera `{"budgets": [...]}`):
+
+```bash
+# httpie (envuelve el array en el campo "budgets")
+http POST :8000/embeddings/ingest budgets:=@data/budgets_sample.json
+
+# curl equivalente
+curl -s -X POST http://localhost:8000/embeddings/ingest \
+  -H 'Content-Type: application/json' \
+  -d "{\"budgets\": $(cat data/budgets_sample.json)}" | python -m json.tool | head -40
+```
+
+Con el sample: 15 presupuestos → 52 chunks → ~4.1k tokens → coste estimado ~$0.00008.
+
+### Script CLI `query_examples.py`
+
+Sanity check del retriever: invoca `POST /embeddings/search` con cinco queries representativas (match directo, reformulación semántica, dominio distinto, ambigua y muy específica) e imprime el top-5 de cada una.
+
+```bash
+# Fuera del contenedor (API en localhost:8000, corpus ya ingestado):
+uv run python query_examples.py
+
+# Stack levantado — dentro del contenedor que ya corre uvicorn:
+docker compose exec estimator python query_examples.py
+
+# Contenedor one-off (sin uvicorn; el script reintenta contra http://estimator:8000):
+docker compose run --rm estimator python query_examples.py
+```
+
+Requiere haber ingestado el corpus antes (`POST /embeddings/ingest`). Escribe los resultados en `output_examples.txt` (también se imprimen en terminal). Los resultados de las tres parejas de similitud pairwise del enunciado original están en [`app/generation/rag/SANITY_CHECK.md`](app/generation/rag/SANITY_CHECK.md).
+
+### Comparativa de estrategias de chunking (sesión en vivo)
+
+Ocho estrategias de chunking tras una interfaz común (`app/generation/rag/chunking/base.py::Chunker`): `structural`, `fixed_size`, `recursive`, `sentence_window`, `semantic`, `propositional`, `contextual_retrieval`, `hierarchical`. Viven en `app/generation/rag/chunking/strategies/` (el estructural en `structural.py`).
+
+```
+POST /embeddings/compare
+  Input:  {"budgets": [...], "queries": [...], "strategies": [...], "top_k": 3}
+  Output: {"stats_per_strategy": {...}, "queries_per_strategy": {...}}
+```
+
+CLI del comparador (la herramienta de las demos), que carga `data/budgets_sample.json` + `data/test_queries.json`:
+
+```bash
+# Estadísticos + coste de todas las estrategias
+uv run python scripts/compare_chunkers.py --strategies all --queries all --show-stats --show-cost
+
+# Top-k de una consulta para dos estrategias
+uv run python scripts/compare_chunkers.py --strategies sentence-window,structural \
+  --queries "OAuth authentication for fintech mobile app" --show-top-k 3
+
+# Comparar dimensiones del modelo (1536 vs 768 / Matryoshka)
+uv run python scripts/compare_chunkers.py --models small-1536,small-768
+
+# Generar el reporte de respaldo
+uv run python scripts/compare_chunkers.py --strategies all --queries all \
+  --show-stats --show-cost --output app/generation/rag/COMPARISON_REPORT.md
+```
+
+Las estrategias `semantic`, `propositional` y `contextual_retrieval` llaman a APIs externas durante la ingesta (necesitan `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) y reportan su coste en `chunking_done`. `sentence_window` usa NLTK (`punkt`/`punkt_tab`, descarga perezosa). El endpoint `/embeddings/compare` sigue siendo **en memoria** (no escribe en Postgres); solo `/embeddings/ingest` persiste.
+
+### Dependencias y scope
+
+- Dependencias del pre-ejercicio: `tiktoken>=0.7.0` (`openai` ya estaba desde Sesión 01).
+- Dependencias de la sesión en vivo: `langchain-text-splitters`, `langchain-experimental`, `langchain-openai`, `nltk` (`anthropic` ya estaba). No se añade numpy/scikit-learn ni `sentence-transformers`; la coseno y los percentiles son stdlib.
+- **Late chunking** se trata como concepto en el directo (no hay código ejecutable: requiere modelos con token-level embeddings que no son el del proyecto).
+- **Fuera de scope de la sesión en vivo** → índice vectorial HNSW, filtrado híbrido por metadatos en retrieval y métricas formales (recall@k, NDCG).
+- El guion del directo está en `guides/session-7-live-guide.md` (git-ignored, material de instructor).
+
+## Persistencia vectorial — decisiones de diseño
+
+El esquema pgvector (`alembic/versions/0001_initial_schema.py`) separa **documento** de **chunk**. La búsqueda usa `cosine_distance` sobre un escaneo secuencial deliberado. Estas cuatro decisiones no son accidentales.
+
+### (a) Dos tablas (`documents` + `chunks`), no una
+
+Un presupuesto ingestado es **un documento** con metadatos de catálogo (`source_path`, `document_type`, sector, año…) y **muchos chunks** embeddables (un componente = un chunk en la estrategia estructural). Mezclarlos en una sola tabla obligaría a repetir `budget_id`, `client_sector`, `main_technology`, etc. en cada fila, o a dejar huecos NULL en columnas que solo aplican a un nivel.
+
+La separación encaja con el ciclo de vida real: el documento se ingesta **una vez** (idempotencia por `source_path` → 409 si ya existe); los chunks son hijos con `ON DELETE CASCADE`. Si mañana re-chunkeamos con otra estrategia, sustituimos filas de `chunks` sin tocar la fila padre ni duplicar el JSON del presupuesto. El retriever consulta `chunks` (donde vive el vector) y puede hacer join a `documents` cuando necesite contexto de archivo — dos granularidades, dos responsabilidades.
+
+### (b) Metadatos en JSONB, no en columnas tipadas
+
+Los campos filtrables **cambian según la estrategia de chunking**: el estructural aporta `component_id` y `tech_stack`; `sentence_window` añade índices de ventana; `hierarchical` introduce niveles de árbol. Modelar cada variante como columna Postgres implicaría una migración Alembic por estrategia nueva y docenas de columnas mayoritariamente NULL.
+
+JSONB mantiene el contrato en el borde (Pydantic valida al ingestar) y la flexibilidad en el almacén. El índice GIN sobre `chunks.metadata` (`ix_chunks_metadata_gin`) prepara filtros del tipo `metadata @> '{"client_sector": "finance"}'` sin fijar el esquema en DDL. Las pocas columnas que sí son estables (`chunk_type`, `document_id`, `source_path`) quedan como columnas porque se usan en *cada* consulta y merecen B-tree.
+
+### (c) `cosine_distance`, no L2 ni producto interno
+
+Los embeddings de `text-embedding-3-small` están **normalizados** (norma ≈ 1). Con vectores unitarios, similitud coseno, producto interno y distancia euclídea **producen el mismo ranking** — pero no la misma escala ni la misma interpretabilidad. Coseno es la métrica estándar en retrieval de texto y coincide con la del cache semántico de Redis (`distance_metric: cosine` en `app/cache/semantic.py`) y con las comparativas del comparador (`cosine_similarity` en stdlib).
+
+Elegir `ChunkRow.embedding.cosine_distance(...)` en el retriever alinea Postgres, Redis y los scripts de evaluación en una sola semántica: distancia 0 = idéntico, 2 = opuesto. L2 penalizaría magnitudes irrelevantes si algún día cambiamos de modelo no normalizado; inner product confundiría distancia con similitud en la API de respuesta.
+
+### (d) Sin índice vectorial todavía
+
+El corpus del curso son **decenas de chunks**, no millones. Un `ORDER BY embedding <=> query LIMIT k` con escaneo secuencial tarda unos pocos milisegundos — menos que el round-trip a la API de embeddings. Crear un índice HNSW o IVFFlat ahora añadiría complejidad de mantenimiento (parámetros `m`/`ef_construction`, rebuild tras cambio de dimensión) sin beneficio medible.
+
+Además, HNSW es **aproximado**: conviene tener primero una línea base exacta (brute-force) para calibrar recall@k antes de aceptar pérdida de recall a cambio de latencia. El paquete `app/generation/rag/store/` está reservado para la Sesión 08 precisamente para ese paso: medir latencia del seq-scan con el corpus real, fijar el umbral donde duele, y entonces añadir `CREATE INDEX … USING hnsw (embedding vector_cosine_ops)` con parámetros justificados por datos, no por costumbre.
 
 ---
 

@@ -7,7 +7,6 @@ metrics flow through. Real LLM is never called.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -19,9 +18,9 @@ from app.dependencies import (
     get_session_store,
 )
 from app.main import app
-from app.schemas.estimation import EstimationResult
-from app.services.estimation import EstimationService
-from app.sessions.store import SessionStore
+from app.domain.schemas.estimation import EstimationResult
+from app.domain.estimation_service import EstimationService
+from app.generation.conversation.store import SessionStore
 from evals.dataset import load_dataset
 from evals.metrics import run_all_metrics
 from tests.conftest import FakeLLMWrapper, make_canned_result
