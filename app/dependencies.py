@@ -7,7 +7,6 @@ from functools import lru_cache
 import anthropic
 import redis
 import structlog
-from fastapi import Depends, HTTPException
 from openai import OpenAI
 
 from app.generation.cag.semantic import EstimationSemanticCache
@@ -15,8 +14,6 @@ from app.config import get_settings
 from app.generation.rag.chunking.base import Chunker
 from app.generation.rag.chunking.structural import JSONStructuralChunker
 from app.generation.rag.embedding.embedder import OpenAIEmbedder
-from app.generation.rag.ingestion_service import EmbeddingIngestionService
-from app.generation.rag.retriever import SemanticRetriever
 from app.generation.rag.chunking.strategies import (
     ContextualRetrievalChunker,
     FixedSizeChunker,
@@ -33,6 +30,10 @@ from app.generation.cag.exact import EstimationCache
 from app.domain.estimation_service import EstimationService
 from app.foundation.llm.runtime_config import RuntimeModelConfig
 from app.foundation.llm.wrapper import LLMWrapper
+from app.foundation.persistence.database import get_async_session_factory
+from app.generation.rag.ingest_service import RagIngestService
+from app.generation.rag.retriever import SemanticRetriever
+from app.generation.rag.store.repository import ChunkStore
 from app.generation.conversation.store import SessionStore
 
 log = structlog.get_logger()
@@ -98,25 +99,41 @@ def get_embedder() -> OpenAIEmbedder | None:
     return OpenAIEmbedder(client=client, model=settings.EMBEDDING_MODEL)
 
 
-def get_embedding_ingestion_service(
-    chunker: JSONStructuralChunker = Depends(get_chunker),
-    embedder: OpenAIEmbedder | None = Depends(get_embedder),
-) -> EmbeddingIngestionService:
-    """Build the ingest service or raise when the embedder is unavailable."""
-    if embedder is None:
-        log.error("embeddings_ingest_failed", reason="embedder_unavailable")
-        raise HTTPException(status_code=500, detail="Embedding service is not available.")
-    return EmbeddingIngestionService(chunker=chunker, embedder=embedder)
+# --- Session 8: pgvector persistence + semantic search ---------------------
 
 
-def get_semantic_retriever(
-    embedder: OpenAIEmbedder | None = Depends(get_embedder),
-) -> SemanticRetriever:
-    """Build the vector retriever or raise when the embedder is unavailable."""
+@lru_cache
+def get_chunk_store() -> ChunkStore:
+    """Stateless async data-access layer over documents/chunks."""
+    return ChunkStore()
+
+
+@lru_cache
+def get_rag_ingest_service() -> RagIngestService | None:
+    """Chunk → embed → persist orchestration. ``None`` without an OpenAI key
+    (mirrors ``get_embedder``); the router maps that to a 500."""
+    embedder = get_embedder()
     if embedder is None:
-        log.error("embeddings_search_failed", reason="embedder_unavailable")
-        raise HTTPException(status_code=500, detail="Embedding service is not available.")
-    return SemanticRetriever(embedder=embedder)
+        return None
+    return RagIngestService(
+        chunker=get_chunker(),
+        embedder=embedder,
+        session_factory=get_async_session_factory(),
+        store=get_chunk_store(),
+    )
+
+
+@lru_cache
+def get_semantic_retriever() -> SemanticRetriever | None:
+    """Query-side counterpart of the ingest service. Same ``None`` contract."""
+    embedder = get_embedder()
+    if embedder is None:
+        return None
+    return SemanticRetriever(
+        embedder=embedder,
+        session_factory=get_async_session_factory(),
+        store=get_chunk_store(),
+    )
 
 
 @lru_cache

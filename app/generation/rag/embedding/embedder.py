@@ -55,27 +55,26 @@ class OpenAIEmbedder:
 
     def embed_many(self, chunks: list[Chunk]) -> list[EmbeddedChunk]:
         """Embed every chunk in order, batching API calls."""
-        vectors = self.embed_texts([chunk.text for chunk in chunks])
-        return [
-            EmbeddedChunk(**chunk.model_dump(), embedding=vector)
-            for chunk, vector in zip(chunks, vectors)
-        ]
+        embedded: list[EmbeddedChunk] = []
+        for start in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[start : start + BATCH_SIZE]
+            texts = [chunk.text for chunk in batch]
+            batch_tokens = sum(chunk.token_count for chunk in batch)
 
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """Embed all texts, batching at :data:`BATCH_SIZE` per API call."""
-        embedded: list[list[float]] = []
-        for start in range(0, len(texts), BATCH_SIZE):
-            batch = texts[start : start + BATCH_SIZE]
             t0 = time.perf_counter()
-            vectors = self._create(batch)
+            vectors = self._create(texts)
             latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+
             log.info(
                 "embedding_batch_done",
                 chunks=len(batch),
+                tokens=batch_tokens,
                 latency_ms=latency_ms,
                 model=self._model,
             )
-            embedded.extend(vectors)
+
+            for chunk, vector in zip(batch, vectors):
+                embedded.append(EmbeddedChunk(**chunk.model_dump(), embedding=vector))
         return embedded
 
     def _create(self, texts: list[str]) -> list[list[float]]:

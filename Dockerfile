@@ -40,7 +40,6 @@ COPY --from=builder /app/.venv /app/.venv
 
 # Copy application source code.
 COPY app/ /app/app/
-COPY query_examples.py /app/query_examples.py
 
 # Ensure the non-root user owns everything it needs to run.
 RUN chown -R appuser:appgroup /app

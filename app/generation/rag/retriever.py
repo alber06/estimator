@@ -1,57 +1,70 @@
-"""Semantic retriever — cosine search over persisted chunk embeddings."""
+"""Semantic retriever over the pgvector store (Session 8).
+
+Embeds the query with the SAME model used at ingest time (mixing embedding
+models makes distances meaningless) and ranks chunks by cosine distance via
+SQL. No vector index and no metadata filtering yet — both are built live in
+the session on top of this baseline.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import time
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.foundation.persistence.models import ChunkRow
 from app.generation.rag.embedding.embedder import OpenAIEmbedder
-from app.generation.rag.schemas import SearchResponse, SearchResult
+from app.generation.rag.schemas import SearchHit, SearchResponse
+from app.generation.rag.store.repository import ChunkStore
+
+log = structlog.get_logger()
 
 
 class SemanticRetriever:
-    """Embed a query and return the nearest chunks from Postgres."""
+    """k-NN retrieval: embed the query, rank chunks by cosine distance."""
 
-    def __init__(self, embedder: OpenAIEmbedder) -> None:
+    def __init__(
+        self,
+        embedder: OpenAIEmbedder,
+        session_factory: async_sessionmaker,
+        store: ChunkStore,
+    ) -> None:
         self._embedder = embedder
+        self._session_factory = session_factory
+        self._store = store
 
-    async def search(self, session: AsyncSession, query: str, k: int) -> SearchResponse:
-        t0 = time.perf_counter()
-        query_vector = self._embedder.embed_one(query)
+    async def search(self, *, query: str, k: int) -> SearchResponse:
+        started = time.perf_counter()
 
-        distance = ChunkRow.embedding.cosine_distance(query_vector).label("distance")
-        stmt = (
-            select(
-                ChunkRow.id,
-                ChunkRow.document_id,
-                ChunkRow.chunk_type,
-                ChunkRow.content,
-                ChunkRow.metadata_,
-                distance,
-            )
-            .where(ChunkRow.embedding.is_not(None))
-            .order_by(distance)
-            .limit(k)
-        )
-        rows = (await session.execute(stmt)).all()
-        search_time_ms = round((time.perf_counter() - t0) * 1000)
+        # Sync OpenAI client → thread, same reasoning as in the ingest path.
+        query_vector = await asyncio.to_thread(self._embedder.embed_one, query)
 
-        return SearchResponse(
+        async with self._session_factory() as session:
+            rows = await self._store.search(session, query_vector=query_vector, k=k)
+
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        response = SearchResponse(
             query=query,
             k=k,
-            search_time_ms=search_time_ms,
+            search_time_ms=elapsed_ms,
             results=[
-                SearchResult(
+                SearchHit(
                     chunk_id=row.id,
                     document_id=row.document_id,
                     chunk_type=row.chunk_type,
                     content=row.content,
-                    distance=round(float(row.distance), 3),
-                    metadata=row.metadata_ or {},
+                    distance=float(row.distance),
+                    metadata=row.metadata_,
                 )
                 for row in rows
             ],
         )
+        log.info(
+            "rag_search_done",
+            query=query[:80],
+            k=k,
+            results=len(response.results),
+            search_time_ms=elapsed_ms,
+        )
+        return response

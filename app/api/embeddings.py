@@ -1,7 +1,7 @@
 """HTTP layer for the embedding pipeline.
 
-Thin router: it delegates ingest persistence to :class:`EmbeddingIngestionService`
-and maps failures to status codes. No business logic lives here.
+Thin router: it maps service exceptions to status codes. The chunk → embed →
+persist orchestration lives in ``RagIngestService``; no business logic here.
 """
 
 from __future__ import annotations
@@ -9,91 +9,73 @@ from __future__ import annotations
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import (
     ALL_STRATEGIES,
     build_chunkers,
     get_embedder,
-    get_embedding_ingestion_service,
-    get_semantic_retriever,
+    get_rag_ingest_service,
 )
-from app.foundation.persistence.database import get_async_session
 from app.generation.rag.analysis.comparison import (
     ChunkingComparator,
     CompareRequest,
     CompareResponse,
 )
 from app.generation.rag.embedding.embedder import OpenAIEmbedder
-from app.generation.rag.ingestion_service import DocumentAlreadyIngestedError, EmbeddingIngestionService
-from app.generation.rag.retriever import SemanticRetriever
-from app.generation.rag.schemas import IngestRequest, IngestResponse, SearchRequest, SearchResponse
+from app.generation.rag.ingest_service import DuplicateDocumentError, RagIngestService
+from app.generation.rag.schemas import IngestRequest, IngestResponse
 
 log = structlog.get_logger()
 
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
 
 
-@router.post("/ingest", response_model=IngestResponse)
+@router.post(
+    "/ingest",
+    response_model=IngestResponse,
+    responses={409: {"description": "Document already ingested"}},
+)
 async def ingest(
     request: IngestRequest,
-    session: AsyncSession = Depends(get_async_session),
-    service: EmbeddingIngestionService = Depends(get_embedding_ingestion_service),
-) -> IngestResponse:
-    """Chunk a budget, embed every chunk, and persist vectors in Postgres."""
+    service: RagIngestService | None = Depends(get_rag_ingest_service),
+) -> IngestResponse | JSONResponse:
+    """Persist one budget as a document + embedded chunks (one transaction)."""
+    if service is None:
+        # No OPENAI_API_KEY configured. Generic message to the client, detail logged.
+        log.error("embeddings_ingest_failed", reason="embedder_unavailable")
+        raise HTTPException(status_code=500, detail="Embedding service is not available.")
+
     log.info(
         "embeddings_ingest_received",
         source_path=request.source_path,
         document_type=request.document_type,
-        budget_id=request.content.budget_id,
     )
-
     try:
-        outcome = await service.ingest(session, request)
-    except DocumentAlreadyIngestedError as exc:
+        return await service.ingest(
+            source_path=request.source_path,
+            document_type=request.document_type,
+            budget=request.content,
+        )
+    except DuplicateDocumentError as exc:
+        # JSONResponse (not HTTPException) to keep the exercise's literal
+        # top-level shape: {"detail": ..., "document_id": ...}.
+        log.info(
+            "embeddings_ingest_duplicate",
+            source_path=request.source_path,
+            document_id=exc.document_id,
+        )
         return JSONResponse(
             status_code=409,
-            content={
-                "detail": "Document already ingested",
-                "document_id": exc.document_id,
-            },
+            content={"detail": "Document already ingested", "document_id": exc.document_id},
         )
-    except Exception as exc:  # noqa: BLE001 — any embedding-API failure becomes a 500.
+    except Exception as exc:  # noqa: BLE001 — embedding/DB failures become a 500.
         log.error(
             "embeddings_ingest_failed",
-            reason="ingestion_error",
+            reason="ingest_error",
             error_type=type(exc).__name__,
             error=str(exc)[:300],
         )
-        raise HTTPException(status_code=500, detail="Failed to ingest embeddings.") from exc
-
-    return IngestResponse(
-        document_id=outcome.document_id,
-        chunks_created=outcome.chunks_created,
-        embedding_dimension=outcome.embedding_dimension,
-        ingestion_time_ms=outcome.ingestion_time_ms,
-    )
-
-
-@router.post("/search", response_model=SearchResponse)
-async def search(
-    request: SearchRequest,
-    session: AsyncSession = Depends(get_async_session),
-    retriever: SemanticRetriever = Depends(get_semantic_retriever),
-) -> SearchResponse:
-    """Embed a query and return the nearest chunks by cosine distance."""
-    log.info("embeddings_search_received", query_len=len(request.query), k=request.k)
-
-    try:
-        return await retriever.search(session, request.query, request.k)
-    except Exception as exc:  # noqa: BLE001 — any embedding/DB failure becomes a 500.
-        log.error(
-            "embeddings_search_failed",
-            reason="search_error",
-            error_type=type(exc).__name__,
-            error=str(exc)[:300],
-        )
-        raise HTTPException(status_code=500, detail="Failed to search embeddings.") from exc
+        raise HTTPException(status_code=500, detail="Failed to generate embeddings.") from exc
 
 
 @router.post("/compare", response_model=CompareResponse)

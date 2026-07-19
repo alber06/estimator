@@ -76,46 +76,57 @@ class EmbeddedChunk(Chunk):
 
 
 class IngestRequest(BaseModel):
-    """Payload for ``POST /embeddings/ingest``."""
+    """Payload for ``POST /embeddings/ingest`` (Session 8: persisting contract).
 
-    source_path: str = Field(description="Stable path identifying the source file.")
-    document_type: str = Field(
-        description="Corpus document type, e.g. 'historical_budget'.",
+    One request = one document. ``content`` is the full budget JSON, validated
+    against :class:`Budget` so a malformed corpus fails with a 422 before
+    touching the database or the embeddings API.
+    """
+
+    source_path: str = Field(
+        min_length=1, description="Provenance of the document, unique per ingest."
     )
-    content: Budget = Field(description="Full budget JSON consumed by the structural chunker.")
+    document_type: str = Field(
+        min_length=1, max_length=50, description="Document family, e.g. 'historical_budget'."
+    )
+    content: Budget = Field(description="Full budget JSON, as produced upstream.")
 
 
 class IngestResponse(BaseModel):
-    """Response for ``POST /embeddings/ingest``."""
+    """Response for ``POST /embeddings/ingest``: identifiers + ingest metrics.
 
-    document_id: int = Field(ge=1)
-    chunks_created: int = Field(ge=0)
-    embedding_dimension: int = Field(ge=1)
-    ingestion_time_ms: int = Field(ge=0)
+    Vectors no longer travel over HTTP — they are persisted in pgvector.
+    """
+
+    document_id: int = Field(description="Primary key of the persisted document.")
+    chunks_created: int = Field(ge=0, description="Chunks persisted for this document.")
+    embedding_dimension: int = Field(description="Dimensionality of the stored vectors.")
+    ingestion_time_ms: int = Field(ge=0, description="Wall-clock ingest time.")
 
 
 class SearchRequest(BaseModel):
-    """Payload for ``POST /embeddings/search``."""
+    """Payload for ``POST /search``."""
 
-    query: str = Field(min_length=1, description="Natural-language search query.")
-    k: int = Field(default=5, ge=1, le=100, description="Number of nearest chunks to return.")
+    query: str = Field(min_length=1, description="Free-text semantic query.")
+    k: int = Field(default=5, ge=1, le=50, description="Number of nearest chunks to return.")
 
 
-class SearchResult(BaseModel):
-    """A single chunk hit from vector search."""
+class SearchHit(BaseModel):
+    """One ranked chunk. ``chunk_id`` is the DB primary key; the traceable
+    corpus id ('BUD-X::COMP-Y' parts) travels inside ``metadata``."""
 
-    chunk_id: int = Field(ge=1)
-    document_id: int = Field(ge=1)
+    chunk_id: int
+    document_id: int
     chunk_type: str
     content: str
-    distance: float = Field(ge=0, description="Cosine distance to the query embedding.")
-    metadata: dict = Field(default_factory=dict)
+    distance: float = Field(description="Cosine distance (lower = more similar).")
+    metadata: dict
 
 
 class SearchResponse(BaseModel):
-    """Response for ``POST /embeddings/search``."""
+    """Response for ``POST /search``."""
 
     query: str
-    k: int = Field(ge=1)
+    k: int
     search_time_ms: int = Field(ge=0)
-    results: list[SearchResult]
+    results: list[SearchHit]
