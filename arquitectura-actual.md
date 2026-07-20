@@ -121,8 +121,6 @@ Lectura del diagrama:
 - **Verde**: endpoints por dominio (`estimation`, `ingestion`, `embeddings`, `search`, `config/health`) y los tres servicios de corpus (`ingest/`, `embedding_pipeline/`, `storage/`). Las flechas sólidas son las únicas llamadas reales hoy: `ingestion` → `ingest/`; `embeddings` → `embedding_pipeline/` (+ `storage/` en `/embeddings/ingest`); `search` → `embedding_pipeline/` + `storage/`; y `embedding_pipeline/` → `storage/`.
 - **Rojo**: hueco actual. `POST /api/v1/estimate` y los `…/estimate` / `…/estimate-acb` de sessions no consumen `storage/`; el retrieval no está cableado en `EstimationService`.
 
-
-
 ## 2. Trace manual — transcripción `02_ambiguous.txt`
 
 Transcripción: reunión exploratoria con Rubén Castaño (Casa Castaño, tienda gourmet). Pide, de forma vaga, e-commerce + fidelización/puntos + panel de pedidos/stock + pago con tarjeta + email transaccional. Sector implícito: **ecommerce / retail**, no banca.
@@ -152,7 +150,7 @@ Script de trace: `scripts/trace_s08_ambiguous.py` — `OpenAIEmbedder.embed_one(
 
 **Llamada:** `OpenAIEmbedder.embed_one(transcript)` (mismo modelo que ingest/search).
 
-**Respuesta cruda** (captura real, 2855 chars de input):
+**Respuesta cruda**:
 
 ```json
 {
@@ -270,8 +268,6 @@ Content-Type: application/json
 }
 ```
 
-
-
 ### Paso 3 — Lectura chunk a chunk
 
 
@@ -293,10 +289,8 @@ Cinco fallos concretos y verificables que hoy impiden convertir `02_ambiguous.tx
 ### Fallo 1 — El retrieval no entra en la estimación
 
 - **Problema observado:** el trace llega a `POST /search` y obtiene chunks útiles (`BUD-2024-005`), pero `EstimationService.estimate()` / `estimate_conversational()` no llaman al `SemanticRetriever`. Una estimación real seguiría siendo solo prompt + LLM (o CAG), sin esos históricos.
-- **Causa probable:** decisión arquitectónica de S08: `store/` + `retriever` existen como endpoint aparte; el cableado RAG → generación quedó fuera del request path de estimación (el hueco rojo del diagrama de la sección 1).
-- **Propuesta de solución:** una etapa de *retrieve-then-generate* dentro de `EstimationService` que inyecte los chunks rankeados (o un resumen de ellos) en el prompt de estimación antes de `complete_structured`.
-
-
+- **Causa probable:** decisión arquitectónica: `store/` + `retriever` existen como endpoint aparte; el cableado RAG → generación quedó fuera del request path de estimación.
+- **Propuesta de solución:** una etapa de *retrieve-then-generate* dentro de `EstimationService` que inyecte los chunks rankeados en el prompt de estimación antes de la generación en el LLM.
 
 ### Fallo 2 — Query larga conversacional vs chunks cortos de componente
 
@@ -304,40 +298,30 @@ Cinco fallos concretos y verificables que hoy impiden convertir `02_ambiguous.tx
 - **Causa probable:** Al hacer embedding de la transcripcion cruda, se genera mucho ruido y se pierden señales de la transcripcion.
 - **Propuesta de solución:** reformulación de la query usando extracción estructurada + query re-writing para mejorar la precisión de la región donde viven los chunks relevantes.
 
-
-
 ### Fallo 3 — Top-k sin umbral: entra ruido del mismo sector
 
 - **Problema observado:** el 5.º hit es `BUD-2024-008::RET-001` (portal de devoluciones moda), distancia 0.639 — casi igual que el storefront PWA (0.632). Rubén no pide returns; el retriever lo devuelve igual porque `k=5` siempre rellena huecos.
 - **Causa probable:** `SemanticRetriever` rankea por distancia coseno y corta en `k`; no hay umbral de similitud mínima ni filtro por `client_sector` / tipo de componente, aunque esos campos viajan en `metadata`.
 - **Propuesta de solución:** usar política de threshold para descartar chunks que no cumplan distancia mínima y filtros opcionales sobre metadata antes de pasar contexto al generador.
 
+### Fallo 4 — Una sola búsqueda no cubre los requisitos distintos de la reunión
 
+- **Problema observado:** Rubén pide al menos cinco cosas distintas (tienda online, puntos/club, panel de pedidos/stock, pago con tarjeta, email de pedido). El top-5 está dominado por un solo presupuesto. No aparece nada de loyalty ni de dashboard operativo; `BUD-2024-017` (QuickShop: cart + “Pay with card” + “Order email”) no entra aunque es más cercano en tono MVP.
+- **Causa probable:** el retrieval es de una sola query global + ranking por similitud agregada favorece el documento “más parecido en bloque” (ShopSphere rico) frente a cubrir el abanico de intenciones; no hay multi-query ni diversidad por `budget_id`/`component_id`.
+- **Propuesta de solución:** recuperar por requisito  y fusionar resultados con diversidad (p. ej. al menos un hit de checkout/pago, uno de admin/panel, uno de notificaciones), no solo el vecindario de un único proyecto headless.
 
-### Fallo 4 — No hay ensamblado de contexto RAG hacia el prompt
+### Fallo 5 — El corpus no ancla lo que el cliente enfatiza (loyalty + panel)
 
-- **Problema observado:** el trace produce `SearchHit`s con `content`, `budget_id`, `component_id` y `estimated_hours`, pero las plantillas de estimación (`estimation/v1`–`v3`) solo hablan de `project_metadata` e historial conversacional: no hay variable ni bloque para evidencias recuperadas. Aunque se llamara a `/search`, hoy no existe pieza que convierta esos hits en mensajes/contexto para el LLM.
-- **Causa probable:** el flujo RAG se cortó en el retriever HTTP; falta la etapa de *context assembly* entre `SemanticRetriever` y el prompt builder (`foundation/prompts`). S08 entregó store + search, no el empaquetado hacia generación.
-- **Propuesta de solución:** un ensamblador de contexto que, a partir de los hits filtrados, construya un bloque tipado e inyectable en el prompt de estimación como XML.
-
-
-
-### Fallo 5 — Las horas recuperadas no anclan el `EstimationResult`
-
-- **Problema observado:** los chunks del top-5 ya traen datos cuantitativos relativos a tiempo y coste, pero el contrato que el Instructor impone no pide citar `budget_id`/`component_id` ni justificar `total_cost_eur` / duración con esos números. El LLM se puede inventar fases y costes aunque el retrieval haya sido bueno.
-- **Causa probable:** el schema y los prompts de estimación nacieron en el path CAG sin campos ni reglas de *grounding* sobre evidencias RAG; falta anclar esos datos.
-- **Propuesta de solución:** extender el contrato de salida (o el prompt + un validador) para exigir referencias a chunks usados y coherencia razonable entre horas recuperadas y fases estimadas .
-
-
+- **Problema observado:** en el paso 3 del trace, `RECO-003` sale como “parcial” (recomendaciones ≠ club de puntos) y no hay ningún chunk de “panel de pedidos del día / stock del cuaderno”. Aunque el sector ecommerce está bien representado, las dos demandas más importantes de la reunión no tienen vecino histórico claro.
+- **Causa probable:** el seed `budgets_sample.json` está sesgado a componentes técnicos de producto (catálogo, cart, IoT, PSD2…); no hay presupuestos con loyalty/points ni back-office retail simple, así que el embedding no puede recuperar lo que no está indexado.
+- **Propuesta de solución:** extraer requisitos de la transcripción y, tras el retrieve, marcar los que no tienen hit por encima del umbral como *sin evidencia*.
 
 ### Otros
 
-- **Dominancia de un solo presupuesto en el top-k:** 4/5 hits de `BUD-2024-005`; sin diversidad multi-query, QuickShop (`017`) no aparece pese a cart + pago + email.
-- **Huecos de corpus (loyalty / panel de pedidos):** el seed no tiene vecinos claros para club de puntos ni back-office retail; el retriever sustituye con recomendaciones o returns.
+- **Sin ensamblado de contexto RAG hacia el prompt:** las plantillas `estimation/v1`–`v3` no tienen bloque para `SearchHit`s; falta `context_assembler` entre retriever y prompt builder.
+- **Sin grounding obligatorio en el schema:** `EstimationResult` no exige citar `budget_id`/`component_id` ni justificar horas con el chunk.
 - **CAG ≠ RAG de presupuestos:** el cache semántico Redis no aporta componentes de ShopSphere.
-- **Idioma query/corpus:** transcript ES coloquial vs chunks EN técnicos.
-
-
+- **Idioma query/corpus:** transcript ES coloquial vs chunks EN técnicos — refuerza el fallo 2.
 
 ## 4. Arquitectura objetivo — retrieval cableado en la estimación separación de servicios
 
@@ -417,7 +401,7 @@ flowchart LR
 
 
 `query_reformulator` convierte la transcripción cruda en una o varias queries de búsqueda; `retriever` embebe esas queries, consulta pgvector y aplica threshold + filtros de metadata antes de devolver chunks; `context_assembler` (augmentation dentro de `generation/`) une transcript + chunks recuperados en el bloque de contexto que `prompt_builder` inyecta y que `estimator` manda al LLM.   
-  
+
 El dato que fluye entre los módulos nuevos es siempre el transcript del usuario, esto es, el contexto a través del cuál se recuperan datos de proyectos anteriores para enriquecer el prompt que se le pasa al LLM.
 
 La pieza más crítica, y la primera que añadiría si sólo pudiese construir una, sería el `context_assembler` . Con un ensamblador mínimo que llame al SemanticRetriever e inyecte los hits en el prompt ya se puede utilizar esta búsqueda semántica sobre la generación. Sin esta pieza, el resto de módulos propuestos aquí sólo servirían para el endpoint de búsqueda.
