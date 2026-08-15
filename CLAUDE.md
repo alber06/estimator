@@ -37,39 +37,69 @@ uv run ruff format .
 docker compose up --build
 ```
 
-Service listens on `http://localhost:8000`; `/docs` (Swagger) and `/redoc` are enabled. Health probe at `GET /health`. Main API endpoint is `POST /api/v1/estimate`.
+Service listens on `http://localhost:8000`; `/docs` (Swagger) and `/redoc` are enabled. Health probe at `GET /health`. Main API endpoints: `POST /api/v1/estimate` (S04 CAG estimate) and, from S09, `POST /v1/retrieval/search` + `POST /v1/estimate/from-transcript` (RAG retrieval + grounded estimate; see the Session 9 design point below).
 
-## Architecture (post-Session 4)
+## Architecture (layered: foundation / domain / generation / api)
 
-The estimator is a typed estimation service implementing a five-layer pipeline. Free-text in, validated structured JSON out.
+The estimator is organized around the **three AI architectures it stacks** — CAG (caches), RAG
+(retrieval) and Agentic (Actor-Critic-Boss) — which **compose only through a single conductor**.
+Full contract in **`estimator/ARCHITECTURE.md`** — respect it for all new session code.
+
+`app/` layers (each may import only from layers above it):
+
+```
+app/
+├── config.py · dependencies.py · main.py   # composition root, above the layers
+├── foundation/   llm · prompts · guardrails · attachments · persistence  (no AI-arch opinion)
+├── domain/       schemas/ (the contract) + estimation_service.py (the conductor)
+├── generation/   cag/ · rag/ · agentic/ · conversation/   (the 3 architectures + substrate)
+├── ingestion/    offline batch pipeline that feeds RAG
+└── api/          thin routers (transport)
+```
+
+Five-layer request pipeline. Free-text in, validated structured JSON out:
 
 ```
 POST /api/v1/estimate
-  └→ app/routers/estimations.py    (thin HTTP layer, error mapping)
-       └→ app/services/estimation.py::EstimationService.estimate()
-            1. app/guardrails/input.py::check_input()         (moderation + injection + PII)
-            2. app/services/cache.py::EstimationCache.get()   (exact-match SHA-256)
-            3. app/cache/semantic.py::EstimationSemanticCache.lookup()
+  └→ app/api/estimations.py    (thin HTTP layer, error mapping)
+       └→ app/domain/estimation_service.py::EstimationService.estimate()
+            1. app/foundation/guardrails/input.py::check_input()      (moderation + injection + PII)
+            2. app/generation/cag/exact.py::EstimationCache.get()     (exact-match SHA-256)
+            3. app/generation/cag/semantic.py::EstimationSemanticCache.lookup()
                                                                 (redisvl vector similarity)
-            4. app/prompts/loader.py::render_estimation_prompt()  (Jinja2 versioned templates)
-            5. app/services/llm_wrapper.py::complete_structured()
+            4. app/foundation/prompts/loader.py::render_estimation_prompt()  (Jinja2 versioned)
+            5. app/foundation/llm/wrapper.py::complete_structured()
                                                                 (Instructor + Pydantic validators
                                                                  with automatic re-prompt)
-            6. app/guardrails/output.py::enforce_scope_response() (filter policy)
+            6. app/foundation/guardrails/output.py::enforce_scope_response() (filter policy)
             7. cache.set() + semantic_cache.store()
             8. return EstimationResponse(result, prompt_version, cached)
 ```
 
+**Layering rules** (see `estimator/ARCHITECTURE.md` for the full table):
+- `foundation/` imports only `config`. `domain/schemas` imports `foundation`. `generation/<x>`
+  imports `foundation` + `domain/schemas` but **never another `generation` sibling** (the one
+  exception: `agentic` may import `conversation`).
+- The `generation` siblings (cag/rag/agentic) meet **only** inside the conductor
+  (`domain/estimation_service.py`). New cross-layer composition goes there, never in a router
+  and never via a sibling import.
+- `api/` is transport only (error mapping); `dependencies.py` is the composition root that wires
+  every singleton and is allowed to import anything.
+
 Key design points future changes should respect:
 
 - **The router has no business logic.** It only catches three exceptions and turns them into HTTP statuses: `InputGuardrailViolation` → 400, anything else from the pipeline (including `instructor.exceptions.InstructorRetryException`) → 502, plus Pydantic 422 from `EstimationRequest` validation. Add new policies inside `EstimationService.estimate()`, not in the router.
-- **Schema is the contract.** `EstimationResult` (in `app/schemas/estimation.py`) is what Instructor enforces against the LLM. The two `model_validator`s (`phases_sum_matches_total`, `low_confidence_requires_out_of_scope_prefix`) are the business rules — when they raise, Instructor re-prompts the LLM up to `max_retries=6` times.
+- **Schema is the contract.** `EstimationResult` (in `app/domain/schemas/estimation.py`) is what Instructor enforces against the LLM. The two `model_validator`s (`phases_sum_matches_total`, `low_confidence_requires_out_of_scope_prefix`) are the business rules — when they raise, Instructor re-prompts the LLM up to `max_retries=6` times.
 - **Field order matters with Instructor.** `phases` is declared BEFORE `total_cost_eur` / `total_duration_weeks` on purpose: the LLM emits phases first (autoregressive) and then only needs to sum, instead of picking a round total and back-fitting phases. With smaller models like `gpt-4o-mini` this is the difference between consistent success and arithmetic failures.
-- **Two caches in series.** Exact-match cache (`app/services/cache.py`) keys on SHA-256 of the typed request + prompt_version + model. The semantic cache (`app/cache/semantic.py`) layers on top: same bucket (`prompt_version:project_type:detail_level:output_format`) + cosine similarity ≥ `SEMANTIC_CACHE_THRESHOLD` (default 0.85). The semantic cache requires Redis Stack (`redis/redis-stack:7.4.0-v0`), not vanilla Redis — RediSearch is mandatory for vector queries.
+- **Two caches in series.** Both live in the CAG layer (`app/generation/cag/`). The exact-match cache (`app/generation/cag/exact.py`) keys on SHA-256 of the typed request + prompt_version + model. The semantic cache (`app/generation/cag/semantic.py`) layers on top: same bucket (`prompt_version:project_type:detail_level:output_format`) + cosine similarity ≥ `SEMANTIC_CACHE_THRESHOLD` (default 0.85). The semantic cache requires Redis Stack (`redis/redis-stack:7.4.0-v0`), not vanilla Redis — RediSearch is mandatory for vector queries.
 - **Guardrails are policies, not features.** `check_input` uses `exception` policy (raise on violation). `enforce_scope_response` uses `filter` (rewrite the summary). The schema validators use `re-prompt` (Instructor handles it). The split is documented in the live-session guide.
-- **Settings are a cached singleton** via `app/config.py::get_settings` (`@lru_cache`). Any change to `.env` requires recreating the container (`docker compose up -d --force-recreate`); a `--reload` is not enough.
+- **Settings are a cached singleton** via `app/config.py::get_settings` (`@lru_cache`). Any change to `.env` requires recreating the container (`docker compose up -d --force-recreate`); a `--reload` is not enough. **Exception: the LLM model knobs** (`PRIMARY_MODEL`, `FALLBACK_MODEL`, `CRITIC_MODEL`, metadata/compression/chunker models) can be overridden at runtime via `PUT /api/v1/config/models` (Redis-backed `app/foundation/llm/runtime_config.py`, surfaced in the Rails "Ajustes" tab) — overrides survive `--reload` and restarts, and both caches partition by model.
 - **Logging** is `structlog`. JSON in `production`, console in dev. Use `structlog.get_logger()` rather than stdlib `logging`.
 - **The LLM wrapper bypasses the Router for streaming and for structured calls** (see `_dispatch`). LiteLLM's Router does round-robin between deployments, which would non-deterministically route to a fallback that may be unreachable. For deterministic behaviour `complete_structured` always uses the primary model directly.
+- **Session 9 closes the transcript → estimate loop (RAG generation).** A second, RAG-native estimate path lives entirely in `app/generation/rag/` and is exposed by two independently-secured routers in `app/api/routers/`:
+  - `POST /v1/retrieval/search` (auth `RETRIEVAL_API_KEY`, 120/min) — metadata-filtered k-NN with a relevance threshold + soft-fail. It supersedes the unauthenticated Session 8 `POST /search`, which stays only for backwards compatibility (Chunking Lab / S08 demos).
+  - `POST /v1/estimate/from-transcript` (auth `ESTIMATE_API_KEY`, 10/min, idempotent on `idempotency_key`) — runs `estimate_from_transcript`: `reformulate_query` → `compose_search_text` + embed → `search_chunks` (soft-fail short-circuits to `confidence="insufficient"`) → `truncate_to_token_budget` → `build_context_block` (XML `<source>` delimiters) → `generate_estimate` → `validate_citations` (one corrective retry on fabricated ids) → coherence check.
+  This path **reuses `LLMWrapper`** (Instructor + LiteLLM) for both reformulation (`REFORMULATION_MODEL`, default `gpt-5-mini`) and generation (`GENERATION_MODEL`, default `gpt-5`, `reasoning_effort="high"`, `max_tokens=GENERATION_MAX_TOKENS` default 64000 — reasoning tokens count against the budget) — NOT the raw OpenAI Responses API. It emits the hours-based `Estimate` schema: a nested `modules` → `tasks` breakdown (`WorkModule`/`TaskItem`, each task with `engineer_days` + `sources`) plus `total_engineer_days` and mandatory `SourceCitation`s + `Assumption`s — distinct from and coexisting with the Session 4 euro/weeks `EstimationResult`. The engineer-day numbers are **LLM-inferred**, grounded in the historical `estimated_hours` the model reads from the retrieved `<source>` chunk text (the retriever does no numeric aggregation). To ground the *task-granular* breakdown there is an optional task-level corpus: `scripts/build_task_corpus.py` deterministically synthesises projects decomposed into modules→tasks (each task = a `BudgetComponent` carrying the new optional `module` field, surfaced by the structural chunker), writes `data/task_corpus.json`, and `--ingest`s it via `/embeddings/ingest` tagged `document_type='historical_task_breakdown'` / `chunk_type='historical_task'` (filterable; `IngestRequest.chunk_type` defaults to `budget_component`, so S08 ingest is unchanged). It coexists with the base corpus; wipe with `DELETE FROM documents WHERE document_type='historical_task_breakdown'`. A teaching-only set of per-stage endpoints (`POST /v1/estimate/stages/{reformulate,retrieve,assemble,generate}`, `app/api/routers/estimate_stages.py`) exposes each pipeline step for the Rails wizard, reusing the same pure functions. Cross-cutting: per-API-key rate limiting (`app/api/rate_limiting.py`, slowapi), constant-time key checks (`app/api/security.py`, `secrets.compare_digest`), idempotency store (`app/generation/rag/idempotency.py`, Redis or in-process fallback), and an `X-Request-ID` correlation header set by middleware in `app/main.py` (per-stage logs via `log_stage`).
 
 ## Configuration
 
@@ -86,6 +116,13 @@ Session 4 vars:
 - `SEMANTIC_CACHE_THRESHOLD` — cosine similarity threshold (0..1). 0.85 default = the typical range mentioned in the live guide. Lower = more hits, more false positives.
 - `SEMANTIC_CACHE_TTL` — seconds (24h default).
 - `SEMANTIC_CACHE_LOG_ONLY` — when `true`, the cache logs would-be hits but never serves them. Use it to calibrate the threshold against real traffic before flipping on.
+
+Session 9 vars (RAG estimation):
+- `RETRIEVAL_API_KEY` / `ESTIMATE_API_KEY` — independent keys for the two routers (header `X-API-Key`). Blank disables the router (401 on every request).
+- `REFORMULATION_MODEL` / `GENERATION_MODEL` / `GENERATION_REASONING_EFFORT` — default `gpt-5-mini` / `gpt-5` / `medium`. In `AVAILABLE_MODELS`, so switchable at runtime via the Ajustes tab.
+- `RETRIEVAL_TOP_K` / `RETRIEVAL_DISTANCE_THRESHOLD` — locked defaults `10` / `0.6` (cosine distance).
+- `MAX_CONTEXT_TOKENS` — token budget for the assembled `<source>` block (tiktoken `cl100k_base`; default 16384).
+- `IDEMPOTENCY_TTL` — seconds (24h). Idempotency store uses `REDIS_URL` when reachable, else an in-process dict.
 
 ## Docker
 
@@ -125,11 +162,13 @@ docker compose exec estimator-web bin/rails test
 docker compose exec postgres psql -U postgres estimator_web_development
 ```
 
-Design points to respect when editing:
+Design points to respect when editing (full layer map and rules in `estimator-web/ARCHITECTURE.md`):
 
-- **`EstimationResponse.from_hash` builds nested `EstimationResult` + `Phase` POROs** from the FastAPI JSON. The view (`show.html.erb`) renders the typed object, not raw text.
+- **The app is organized by contexts mirroring the Master's modules** — `estimation` (S04), `conversation` (S05), `rag` (S07) — over an `EstimatorAi` foundation (`app/services/estimator_ai/`: `BaseClient` + one client per context) that is the only layer talking HTTP to FastAPI. Contexts never import each other.
+- **Contract POROs mirror the Pydantic schemas 1:1** (`from_hash` ↔ `model_validate`): `Estimation::Response.from_hash` builds nested `Estimation::Result` + `Estimation::Phase`; `Rag::ComparisonResponse.from_hash` builds the chunking-comparison tree. Views render the typed objects, not raw JSON; AR roots persist the full payload as JSONB.
 - **The `Stimulus form_loading_controller`** is intentionally simple: it just disables the submit button and shows rolling phase messages while Rails waits for FastAPI. No SSE / no streaming — those were removed when the response became a single JSON object.
 - **The cliente never talks to OpenAI / Anthropic directly.** It only POSTs to FastAPI, and the FastAPI handles guardrails, LLM calls and caches. That boundary is deliberate and documented in the session guide.
-- **GuardrailViolation is a first-class error** in the cliente (`app/services/estimator_ai/client.rb`). The FastAPI returns 400 with `{detail: {reason, message}}` when input is rejected (moderation/prompt_injection/pii); the cliente surfaces this in `flash`.
+- **GuardrailViolation is a first-class error** in the cliente (`EstimatorAi::GuardrailViolation`, raised by `app/services/estimator_ai/base_client.rb`). The FastAPI returns 400 with `{detail: {reason, message}}` when input is rejected (moderation/prompt_injection/pii); the cliente surfaces this in `flash`.
+- **The Chunking Lab** (`/rag/chunking_comparisons`, S07) compares chunking strategies via `POST /embeddings/compare` over the bundled corpus (`lib/estimator_ai/data/`); each run is persisted (`chunking_comparisons`) so paid strategies are never re-paid. Long calls pass a per-instance timeout (`EmbeddingsClient.new(timeout: 600)`) — the global 180s default stays.
 - **`config/database.yml` reads `DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_USER` / `DATABASE_PASSWORD` from ENV** with `nil` fallbacks (Unix socket when not in docker).
 - **Kamal and Thruster** (`.kamal/`, `config/deploy.yml`, `bin/kamal`, `bin/thrust`, gems with `require: false`) are leftovers from `rails new`. Production is out of scope.
